@@ -280,7 +280,8 @@ var require_core = __commonJS({
       }
       return targets;
     }
-    var LIMIT = new RegExp("^\\s*(\\d+(?:\\.\\d+)?(?:\\s*/\\s*\\d+(?:\\.\\d+)?)?)\\s*(words?|characters?|chars?|pages?)\\s*$", "i");
+    var NUM = "\\d+(?:\\.\\d+)?";
+    var LIMIT = new RegExp(`^\\s*(${NUM}(?:\\s*/\\s*${NUM})?)\\s*(words?|characters?|chars?|pages?)\\s*$`, "i");
     function parseAmount(text) {
       const parts = String(text).split("/").map((s) => Number(s.trim()));
       if (parts.length === 1) return parts[0];

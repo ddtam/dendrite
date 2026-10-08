@@ -378,8 +378,10 @@ function alignColumns(cols, active, pos, heights) {
 
 // ---- limits and counts ---------------------------------------------------
 
-const LIMIT = new RegExp('^\\s*(\\d+(?:\\.\\d+)?(?:\\s*/\\s*\\d+(?:\\.\\d+)?)?)' +
-                         '\\s*(words?|characters?|chars?|pages?)\\s*$', 'i');
+// An amount, which may be a fraction, then a unit.
+const NUM = '\\d+(?:\\.\\d+)?';
+const LIMIT = new RegExp(`^\\s*(${NUM}(?:\\s*/\\s*${NUM})?)\\s*` +
+                         '(words?|characters?|chars?|pages?)\\s*$', 'i');
 
 /** `12`, `0.5` or `1/4` as a number; NaN if unreadable. */
 function parseAmount(text) {
