@@ -96,7 +96,7 @@ A limit is in words, characters or pages, and is counted from what export would 
 
 Cards are ordinary notes, so any plugin that rewrites notes acts on them too. The [Linter](https://github.com/platers/obsidian-linter) plugin's "File name heading" rule would insert a card's ID as its heading, so Dendrite adds the writing folder to Linter's **Folders to ignore**, once and with a notice. It removes only an entry it added itself, and the setting **Keep Linter out of the writing folder** turns this off.
 
-Linter's clean-up still reaches cards, through Dendrite: when you leave a card you changed, Dendrite runs Linter on it with "File name heading" switched off for that run, so blank lines, emphasis markers and list markers are tidied as on save. **Clean up cards with Linter** turns this off. It uses Linter's internal `runLinterFile`; if a Linter update removes it, cards are simply left unlinted.
+Linter's clean-up still reaches cards, through Dendrite: when you leave a card you changed, Dendrite runs Linter on it with "File name heading" and "Capitalize headings" switched off for that run, so blank lines, emphasis markers and list markers are tidied as on save. **Clean up cards with Linter** turns this off. It uses Linter's internal `runLinterFile`; if a Linter update removes it, cards are simply left unlinted.
 
 ## Labels
 

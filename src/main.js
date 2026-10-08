@@ -39,10 +39,11 @@ const DEFAULTS = {
     linterAdded: null,
 };
 const LINTER_ID = 'obsidian-linter';
-// Linter rules that break a card, switched off when Dendrite lints one.
-// "File name heading" inserts the card's ID as its heading, which then
-// becomes its label and an exported section heading.
-const CARD_UNSAFE_RULES = ['file-name-heading'];
+// Linter rules switched off when Dendrite lints a card. "File name
+// heading" inserts the card's ID as its heading, which then becomes its
+// label and an exported section heading; "Capitalize headings" rewrites
+// the case of headings as they are written.
+const CARD_UNSAFE_RULES = ['file-name-heading', 'capitalize-headings'];
 // A card note is `<prefix>-<5 characters>.md` inside a `cards` folder.
 const CARD_NAME = /^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*-[a-z0-9]{5}$/;
 const UNDO_DEPTH = 50;

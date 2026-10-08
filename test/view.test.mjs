@@ -373,6 +373,7 @@ test('a changed card is linted with the card-breaking rules off',
     const linter = {
         settings: { ruleConfigs: {
             'file-name-heading': { enabled: true },
+            'capitalize-headings': { enabled: true },
             'emphasis-style': { enabled: true } }, foldersToIgnore: [] },
         async runLinterFile(f) {
             seen.push({ path: f.path, rules: this.settings.ruleConfigs });
@@ -393,6 +394,7 @@ test('a changed card is linted with the card-breaking rules off',
     await view.endEdit();
     assert.equal(seen.length, 1);
     assert.equal(seen[0].rules['file-name-heading'].enabled, false);
+    assert.equal(seen[0].rules['capitalize-headings'].enabled, false);
     assert.equal(seen[0].rules['emphasis-style'].enabled, true);
     assert.equal(linter.settings.ruleConfigs['file-name-heading'].enabled,
                  true, 'Linter\'s own settings are restored');

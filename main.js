@@ -594,7 +594,7 @@ var DEFAULTS = {
   linterAdded: null
 };
 var LINTER_ID = "obsidian-linter";
-var CARD_UNSAFE_RULES = ["file-name-heading"];
+var CARD_UNSAFE_RULES = ["file-name-heading", "capitalize-headings"];
 var CARD_NAME = /^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*-[a-z0-9]{5}$/;
 var UNDO_DEPTH = 50;
 function prefixOf(app, file) {
