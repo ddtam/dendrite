@@ -20,6 +20,8 @@ function make(tag, o = {}, parent) {
     if (typeof o === 'string') o = { cls: o };
     if (o.cls) el.className = o.cls;
     if (o.text !== undefined) el.textContent = o.text;
+    if (o.type) el.setAttribute('type', o.type);
+    if (o.value !== undefined) el.setAttribute('value', o.value);
     if (parent) parent.appendChild(el);
     return el;
 }

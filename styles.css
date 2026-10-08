@@ -408,3 +408,129 @@
 .dendrite-cm .cm-editor.cm-focused {
     outline: none;
 }
+
+/* A card's quota: a target and a bar at its bottom left. */
+.dendrite-card {
+    padding-bottom: 22px;
+}
+
+.dendrite-quota {
+    position: absolute;
+    left: 8px;
+    bottom: 5px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+    color: var(--text-faint);
+    transition: opacity 150ms ease;
+}
+
+.dendrite-quota-icon {
+    display: inline-flex;
+}
+
+.dendrite-quota-icon svg {
+    width: 13px;
+    height: 13px;
+}
+
+.dendrite-quota-bar {
+    width: 56px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--background-modifier-border);
+    overflow: hidden;
+}
+
+.dendrite-quota-fill {
+    height: 100%;
+    width: 0;
+    background: var(--interactive-accent);
+    transition: width 200ms ease;
+}
+
+.dendrite-quota.is-required .dendrite-quota-icon {
+    color: var(--text-muted);
+}
+
+.dendrite-quota.is-over-target .dendrite-quota-fill,
+.dendrite-quota.is-over-target .dendrite-quota-icon {
+    background-color: transparent;
+    color: var(--color-orange, var(--text-warning));
+}
+
+.dendrite-quota.is-over-target .dendrite-quota-fill {
+    background: var(--color-orange, var(--text-warning));
+}
+
+.dendrite-quota.is-over-required .dendrite-quota-icon {
+    color: var(--text-error);
+}
+
+.dendrite-quota.is-over-required .dendrite-quota-fill {
+    background: var(--text-error);
+}
+
+/* No quota: hidden until the card is hovered, then offered faintly. */
+.dendrite-quota.is-empty {
+    opacity: 0;
+}
+
+.dendrite-quota.is-empty .dendrite-quota-bar {
+    display: none;
+}
+
+.dendrite-card:hover .dendrite-quota.is-empty {
+    opacity: 0.5;
+}
+
+.dendrite-card:hover .dendrite-quota.is-empty:hover {
+    opacity: 1;
+}
+
+.dendrite-quota-tip {
+    position: fixed;
+    z-index: var(--layer-tooltip, 40);
+    transform: translateY(-100%);
+    padding: 6px 8px;
+    border-radius: var(--radius-s);
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    box-shadow: var(--shadow-s);
+    font-size: var(--font-ui-smaller);
+    color: var(--text-muted);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 150ms ease;
+}
+
+.dendrite-quota-tip.is-shown {
+    opacity: 1;
+}
+
+.dendrite-quota-pop {
+    position: fixed;
+    z-index: var(--layer-popover, 30);
+    display: grid;
+    grid-template-columns: 7em auto;
+    gap: 6px;
+    padding: 8px;
+    border-radius: var(--radius-m);
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    box-shadow: var(--shadow-l);
+    font-size: var(--font-ui-small);
+}
+
+.dendrite-quota-req,
+.dendrite-quota-actions {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.dendrite-quota-actions {
+    justify-content: flex-end;
+}

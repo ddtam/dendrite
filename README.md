@@ -77,6 +77,14 @@ On a phone, the active card's toolbar offers the same actions.
 
 **Text is never discarded.** A card saves while you type and again whenever you leave it, Escape included. Deleted cards go to Obsidian's trash, and Ctrl+Z restores them.
 
+## Splitting and merging cards
+
+While editing a card, **Move selection to a new card below** or **to a new child card** takes the selected text out of the card into a new one; with nothing selected, everything after the cursor moves. Both are in the editor's right-click menu and in the command palette, unbound, for a hotkey of your choosing. The new card is written before the text leaves the original, so a failure leaves the text twice, never nowhere. You stay in the original card, ready to move the next piece.
+
+A card's menu offers **Merge into the card above** and **Merge into the parent card**, which join its text after the other card's and bring its children along.
+
+Undo reverses a move or a merge in one step, but never discards text written since: a moved card you have edited is kept, and a card's text is restored only if it still holds what the change left there.
+
 ## Manuscript settings and card properties
 
 **Settings** in the bar edits the manuscript's properties on its index note: a total limit, whether characters count spaces, words per page for page estimates, numbering, and the top heading level for export. The **sliders** button on a card edits its label and its limit.
@@ -84,6 +92,8 @@ On a phone, the active card's toolbar offers the same actions.
 ### Quotas
 
 A quota is in words, characters or pages, fractions allowed (`1/4 page`), and is **required** (set by the call) or a **target** (your own allocation). It is counted from what export would write for that card's branch, so planning text and comments never count.
+
+Each card shows its quota at its bottom left as a target and a bar filled to its use. Hover it for the figures; click it to edit the quota in place. A card without a quota shows a faint target when hovered, to set one.
 
 Quotas waterfall down the tree. A card's **allocations** are the quotas of the nearest cards below it that carry one, and its card shows both what its branch uses against its quota and what is allocated against it, free or over. The bar does the same for the manuscript's total quota. Going over a required quota shows red; over a target, amber.
 

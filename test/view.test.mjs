@@ -200,38 +200,55 @@ test('numbering shows on section cards and never enters their notes',
                  '# 1. Methods\n\n# 2. Outline\n\n## 2.1 Sub\n\nText.\n');
 });
 
-test('quotas show use and allocations, red if required and amber if not',
-     async () => {
-    const { view, app } = await open(
+test('quotas show as a filled target, with details on hover and a quick ' +
+     'editor on click', async () => {
+    const { view, app, read } = await open(
         '---\ndendrite_prefix: G\ndendrite_limit: 1 page\n' +
         'dendrite_limit_required: true\ndendrite_words_per_page: 10\n---\n' +
-        '- [[G-aaaaa|Aims]]\n    - [[G-bbbbb|p]]\n',
-        { 'G-aaaaa': '---\ndendrite_limit: 3 words\n---\n# Aims\nplan',
+        '- [[G-aaaaa|Aims]]\n    - [[G-bbbbb|p]]\n- [[G-ccccc|C]]\n',
+        { 'G-aaaaa': '---\ndendrite_limit: 8 words\n---\n# Aims\nplan',
           'G-bbbbb': '---\ndendrite_limit: 2 words\n---\n' +
-                     'one two three %%not counted%%' });
+                     'one two three %%not counted%%',
+          'G-ccccc': 'C' });
     await view.updateCounts();
-    const lines = (id) => [...view.cardEls.get(id)
-        .querySelectorAll('.dendrite-quota-line')];
-    const [used, alloc] = lines('G-aaaaa');
-    assert.equal(used.firstChild.textContent, '4 / 3 words');
-    assert.equal(used.querySelector('.dendrite-quota-kind').textContent,
-                 'target');
-    assert.ok(used.hasClass('is-over-target'), 'over a target: amber');
-    assert.equal(alloc.textContent, '2 allocated, 1 free');
+    const widget = (id) => view.cardEls.get(id)
+        .querySelector('.dendrite-quota');
+    const a = widget('G-aaaaa');
+    assert.ok(!a.hasClass('is-empty'));
+    assert.equal(a.querySelector('.dendrite-quota-fill').style.width, '50%',
+                 '4 of 8 words');
+    assert.ok(!a.hasClass('is-over-target'));
+    assert.ok(widget('G-bbbbb').hasClass('is-over-target'),
+              '3 of 2 words: amber');
+    assert.ok(widget('G-ccccc').hasClass('is-empty'),
+              'no quota: hidden until hover');
+    view.showQuotaTip('G-aaaaa', a);
+    const lines = [...document.querySelectorAll(
+        '.dendrite-quota-tip .dendrite-quota-line')];
+    assert.equal(lines[0].firstChild.textContent, '4 / 8 words');
+    assert.equal(lines[1].textContent, '2 allocated, 6 free');
+    view.hideQuotaTip();
     const top = [...view.totalEl.querySelectorAll('.dendrite-quota-line')];
-    assert.equal(top[0].firstChild.textContent, '~0.4 / 1 page',
-                 'pages are an estimate');
-    assert.equal(top[1].textContent, '~0.3 allocated, 0.7 free');
-    const f = view.cardFile('G-aaaaa');
-    await app.fileManager.processFrontMatter(f, (fm) => {
-        fm.dendrite_limit = '1 word';
-        fm.dendrite_limit_required = true;
-    });
-    await view.updateCounts();
-    const [u2, a2] = lines('G-aaaaa');
-    assert.ok(u2.hasClass('is-over-required'), 'over a requirement: red');
-    assert.equal(a2.textContent, '2 allocated, 1 over');
-    assert.ok(a2.hasClass('is-over-required'));
+    assert.equal(top[0].firstChild.textContent, '~0.5 / 1 page',
+                 '5 words at 10 per page');
+
+    // The quick editor writes the quota, required, then removes it.
+    app.keymap = { pushScope() {}, popScope() {} };
+    view.editQuota('G-ccccc', widget('G-ccccc'));
+    const pop = document.querySelector('.dendrite-quota-pop');
+    pop.querySelector('input[type=text]').value = '1/4';
+    pop.querySelector('select').value = 'pages';
+    pop.querySelector('input[type=checkbox]').checked = true;
+    pop.querySelector('button.mod-cta').click();
+    await tick(10);
+    assert.match(read(cardPath('G-ccccc')),
+                 /dendrite_limit: 0.25 pages\ndendrite_limit_required: true/);
+    assert.equal(document.querySelector('.dendrite-quota-pop'), null);
+    view.editQuota('G-ccccc', widget('G-ccccc'));
+    [...document.querySelectorAll('.dendrite-quota-pop button')]
+        .find((b) => b.textContent === 'Remove').click();
+    await tick(10);
+    assert.equal(read(cardPath('G-ccccc')), 'C', 'quota removed');
 });
 
 test('bold, tab and list enter edit the card and are saved', async () => {

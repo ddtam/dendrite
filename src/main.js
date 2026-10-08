@@ -158,6 +158,8 @@ class DendriteView extends ItemView {
     }
 
     async onClose() {
+        this.hideQuotaTip();
+        this.closeQuotaEditor();
         await this.flush();
         if (this.observer) this.observer.disconnect();
         if (this.resizer) this.resizer.disconnect();
@@ -349,6 +351,7 @@ class DendriteView extends ItemView {
                              text: n.label || n.id });
             card.addClass('is-pending');
         }
+        this.renderQuotaWidget(card, n.id);
         this.cardEls.set(n.id, card);
         if (this.observer) this.observer.observe(card);
         if (this.resizer) this.resizer.observe(card);
@@ -598,7 +601,7 @@ class DendriteView extends ItemView {
             return;
         }
         if (e.target.closest('.dendrite-toolbar, textarea, .dendrite-cm, ' +
-                             'button')) return;
+                             'button, .dendrite-quota')) return;
         const card = e.target.closest('.dendrite-card');
         if (card) this.select(card.dataset.id);
         this.contentEl.focus();
@@ -1378,14 +1381,14 @@ class DendriteView extends ItemView {
     async updateCounts() {
         if (!this.file || !this.board) return;
         const ms = this.manuscript();
-        for (const card of this.cardEls.values()) {
-            const old = card.querySelector('.dendrite-count');
-            if (old) old.remove();
-        }
+        this.quotaReports = new Map();
         if (this.totalEl) this.totalEl.empty();
         const any = ms.limit || core.allNodes(this.root).some(
             (n) => this.quotaOf(n.id));
-        if (!any) return;
+        if (!any) {
+            for (const [id, card] of this.cardEls) this.fillQuota(card, id);
+            return;
+        }
         const bodies = await this.loadBodies();
         const bodyOf = (id) => (this.editing && this.editing.id === id) ?
             this.editing.editor.value : bodies.get(id);
@@ -1396,12 +1399,8 @@ class DendriteView extends ItemView {
         const reports = core.quotas(this.root, (id) => this.quotaOf(id),
             countOf, { wordsPerPage: ms.wordsPerPage,
                        charsPerWord: ms.charsPerWord, total });
-        for (const [id, r] of reports) {
-            if (id === null) continue;
-            const card = this.cardEls.get(id);
-            if (card) this.showQuota(card.createDiv(
-                { cls: 'dendrite-count' }), r);
-        }
+        this.quotaReports = reports;
+        for (const [id, card] of this.cardEls) this.fillQuota(card, id);
         if (!this.totalEl) return;
         const top = reports.get(null);
         if (top) {
@@ -1410,6 +1409,130 @@ class DendriteView extends ItemView {
             const n = countOf(this.root.children);
             this.totalEl.setText(`${n.words.toLocaleString()} words`);
         }
+    }
+
+    /**
+     * A card's quota at its bottom left: a target and a bar filled to its
+     * use. Details fade in on hover; a click edits the quota. A card
+     * without one shows the target only on hover, to offer setting one.
+     */
+    renderQuotaWidget(card, id) {
+        const w = card.createDiv({ cls: 'dendrite-quota is-empty' });
+        setIcon(w.createSpan({ cls: 'dendrite-quota-icon' }), 'target');
+        const bar = w.createDiv({ cls: 'dendrite-quota-bar' });
+        bar.createDiv({ cls: 'dendrite-quota-fill' });
+        w.addEventListener('mouseenter', () => this.showQuotaTip(id, w));
+        w.addEventListener('mouseleave', () => this.hideQuotaTip());
+        w.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.hideQuotaTip();
+            this.editQuota(id, w);
+        });
+        const r = this.quotaReports && this.quotaReports.get(id);
+        if (r) this.fillQuota(card, id);
+    }
+
+    fillQuota(card, id) {
+        const w = card.querySelector(':scope > .dendrite-quota');
+        if (!w) return;
+        const r = this.quotaReports && this.quotaReports.get(id);
+        w.removeClass('is-over-required');
+        w.removeClass('is-over-target');
+        w.toggleClass('is-empty', !r);
+        if (!r) return;
+        const kind = r.quota.required ? 'required' : 'target';
+        const share = r.used / r.quota.amount;
+        const over = share > 1 ||
+            (r.allocated !== null && r.allocated > r.quota.amount);
+        if (over) w.addClass(`is-over-${kind}`);
+        w.toggleClass('is-required', r.quota.required);
+        w.querySelector('.dendrite-quota-fill').style.width =
+            Math.min(100, Math.round(share * 100)) + '%';
+    }
+
+    showQuotaTip(id, anchor) {
+        this.hideQuotaTip();
+        const tip = document.body.createDiv({ cls: 'dendrite-quota-tip' });
+        const r = this.quotaReports && this.quotaReports.get(id);
+        if (r) this.showQuota(tip, r);
+        else tip.setText('No quota. Click to set one.');
+        const a = anchor.getBoundingClientRect();
+        tip.style.left = a.left + 'px';
+        tip.style.top = (a.top - 6) + 'px';
+        this.quotaTip = tip;
+        requestAnimationFrame(() => tip.addClass('is-shown'));
+    }
+
+    hideQuotaTip() {
+        if (this.quotaTip) this.quotaTip.remove();
+        this.quotaTip = null;
+    }
+
+    /** A small editor for a card's quota, beside its target. */
+    editQuota(id, anchor) {
+        this.closeQuotaEditor();
+        const f = this.cardFile(id);
+        if (!f) return;
+        const fm = this.cardProps(id);
+        const q = core.parseLimit(fm.dendrite_limit);
+        const pop = document.body.createDiv({ cls: 'dendrite-quota-pop' });
+        const amount = pop.createEl('input', { type: 'text' });
+        amount.placeholder = '500, or 1/4';
+        amount.value = q ? core.fmtNum(q.amount) : '';
+        const unit = pop.createEl('select');
+        for (const u of ['words', 'characters', 'pages']) {
+            unit.createEl('option', { text: u, value: u });
+        }
+        unit.value = q ? q.unit : 'words';
+        const label = pop.createEl('label', { cls: 'dendrite-quota-req' });
+        const req = label.createEl('input', { type: 'checkbox' });
+        req.checked = fm.dendrite_limit_required === true;
+        label.createSpan({ text: 'required by the call' });
+        const row = pop.createDiv({ cls: 'dendrite-quota-actions' });
+        const save = row.createEl('button', { cls: 'mod-cta',
+                                              text: 'Save' });
+        const clear = row.createEl('button', { text: 'Remove' });
+        const a = anchor.getBoundingClientRect();
+        pop.style.left = a.left + 'px';
+        pop.style.top = (a.bottom + 4) + 'px';
+        const write = async (remove) => {
+            const n = core.parseAmount(amount.value);
+            const ok = !remove && amount.value.trim() && n > 0;
+            await writeProps(this.app, f, {
+                dendrite_limit: ok ?
+                    core.formatLimit({ amount: n, unit: unit.value }) : null,
+                dendrite_limit_required: ok && req.checked ? true : null,
+            });
+            this.closeQuotaEditor();
+        };
+        save.onclick = () => write(false);
+        clear.onclick = () => write(true);
+        // Its own key scope, so Enter and Escape reach it and not the
+        // board behind it.
+        const scope = new Scope(this.app.scope);
+        scope.register([], 'Enter', () => { write(false); return false; });
+        scope.register([], 'Escape', () => {
+            this.closeQuotaEditor();
+            return false;
+        });
+        if (this.app.keymap) this.app.keymap.pushScope(scope);
+        const outside = (e) => {
+            if (!pop.contains(e.target)) this.closeQuotaEditor();
+        };
+        setTimeout(() => document.addEventListener('mousedown', outside), 0);
+        this.quotaPop = { pop, scope, outside };
+        amount.focus();
+        amount.select();
+    }
+
+    closeQuotaEditor() {
+        const q = this.quotaPop;
+        if (!q) return;
+        this.quotaPop = null;
+        if (this.app.keymap) this.app.keymap.popScope(q.scope);
+        document.removeEventListener('mousedown', q.outside);
+        q.pop.remove();
+        this.contentEl.focus();
     }
 
     showQuota(el, r) {
