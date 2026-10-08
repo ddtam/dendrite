@@ -270,3 +270,58 @@ test('a column with nothing on the active path aligns children beside ' +
     t = c.alignColumns(cols, C, pos, [400, 400]);
     assert.equal(t[1], 270 - 200);
 });
+
+test('quotas: fractions, conversion and the waterfall of allocations', () => {
+    assert.equal(c.parseAmount('1/4'), 0.25);
+    assert.deepEqual(c.convert(0.5, 'pages', 'words', 500, 6),
+                     { value: 250, estimated: true });
+    assert.deepEqual(c.convert(60, 'characters', 'words', 500, 6),
+                     { value: 10, estimated: true });
+    assert.deepEqual(c.convert(3, 'words', 'words'),
+                     { value: 3, estimated: false });
+
+    // S3 (required, half a page) holds A and B, a quarter page each, and
+    // M with no quota whose child C has 100 words.
+    const root = c.makeRoot();
+    const mk = (id, parent) => {
+        const n = c.makeNode(id, id, null);
+        c.appendChild(parent, n);
+        return n;
+    };
+    const s3 = mk('S3', root);
+    mk('A', s3);
+    mk('B', s3);
+    const m = mk('M', s3);
+    mk('C', m);
+    const q = {
+        S3: { amount: 0.5, unit: 'pages', required: true },
+        A: { amount: 0.25, unit: 'pages', required: false },
+        B: { amount: 0.25, unit: 'pages', required: false },
+        C: { amount: 100, unit: 'words', required: false },
+    };
+    const words = { S3: 1, A: 120, B: 80, M: 0, C: 30 };
+    const countOf = (nodes) => {
+        let w = 0;
+        for (const n of nodes) {
+            for (const x of [n, ...c.descendants(n)]) w += words[x.id];
+        }
+        return { words: w, chars: w * 6 };
+    };
+    const r = c.quotas(root, (id) => q[id] || null, countOf,
+                       { wordsPerPage: 500, charsPerWord: 6,
+                         total: { amount: 1, unit: 'pages' } });
+    const s = r.get('S3');
+    assert.deepEqual(s.parts, ['A', 'B', 'C'],
+                     'the nearest quotas below, through M');
+    assert.equal(s.allocated, 0.25 + 0.25 + 100 / 500);
+    assert.ok(s.allocatedEstimated, 'words were converted to pages');
+    assert.equal(s.used, 231 / 500);
+    assert.ok(s.usedEstimated);
+    assert.equal(r.get('A').used, 120 / 500);
+    assert.equal(r.get('A').allocated, null, 'nothing below A');
+    assert.equal(r.get('C').used, 30);
+    assert.ok(!r.get('C').usedEstimated, 'words are counted, not estimated');
+    assert.deepEqual(r.get(null).parts, ['S3']);
+    assert.equal(r.get(null).allocated, 0.5);
+    assert.equal(r.has('M'), false, 'a card without a quota has no report');
+});

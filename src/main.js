@@ -1168,9 +1168,12 @@ class DendriteView extends ItemView {
             {};
         const top = Number(fm.dendrite_heading_top);
         const wpp = Number(fm.dendrite_words_per_page);
+        const cpw = Number(fm.dendrite_chars_per_word);
         return {
             prefix: this.prefix(),
             limit: core.parseLimit(fm.dendrite_limit),
+            limitRequired: fm.dendrite_limit_required === true,
+            charsPerWord: cpw > 0 ? cpw : 6,
             countSpaces: fm.dendrite_count_spaces !== false,
             wordsPerPage: wpp > 0 ? wpp : 500,
             headingTop: top >= 1 && top <= 6 ? top :
@@ -1231,66 +1234,79 @@ class DendriteView extends ItemView {
      * only when some limit is set, so a manuscript without limits pays
      * nothing for this.
      */
+    /** A card's quota, with whether the call requires it. */
+    quotaOf(id) {
+        const fm = this.cardProps(id);
+        const q = core.parseLimit(fm.dendrite_limit);
+        return q ? Object.assign(q, {
+            required: fm.dendrite_limit_required === true }) : null;
+    }
+
+    /**
+     * Each card with a quota shows what it uses against it and what the
+     * quotas below it allocate; the bar does the same for the manuscript
+     * total. Over a required quota is an error, over a target a warning.
+     * Card text is read only when some quota is set.
+     */
     async updateCounts() {
         if (!this.file || !this.board) return;
         const ms = this.manuscript();
-        const limited = core.allNodes(this.root).filter(
-            (n) => core.parseLimit(this.cardProps(n.id).dendrite_limit));
         for (const card of this.cardEls.values()) {
             const old = card.querySelector('.dendrite-count');
             if (old) old.remove();
         }
-        if (!ms.limit && !limited.length) {
-            if (this.totalEl) this.totalEl.empty();
-            return;
-        }
+        if (this.totalEl) this.totalEl.empty();
+        const any = ms.limit || core.allNodes(this.root).some(
+            (n) => this.quotaOf(n.id));
+        if (!any) return;
         const bodies = await this.loadBodies();
         const bodyOf = (id) => (this.editing && this.editing.id === id) ?
             this.editing.editor.value : bodies.get(id);
-        const count = (nodes) => core.countText(
+        const countOf = (nodes) => core.countText(
             core.exportMarkdown(nodes, bodyOf, 1), ms.countSpaces);
-        const show = (el, n, limit) => {
-            const have = core.measure(n, limit.unit, ms.wordsPerPage);
-            const over = have > limit.amount;
-            const fmt = limit.unit === 'pages' ?
-                `~${have.toFixed(1)} / ${core.formatLimit(limit)} ` +
-                    '(estimate)' :
-                `${Math.round(have).toLocaleString()} / ` +
-                    core.formatLimit(limit);
-            el.setText(fmt);
-            el.toggleClass('is-over', over);
-        };
-        for (const n of limited) {
-            const card = this.cardEls.get(n.id);
-            if (!card) continue;
-            const el = card.createDiv({ cls: 'dendrite-count' });
-            show(el, count([n]), core.parseLimit(
-                this.cardProps(n.id).dendrite_limit));
+        const total = ms.limit ? Object.assign({}, ms.limit,
+            { required: ms.limitRequired }) : null;
+        const reports = core.quotas(this.root, (id) => this.quotaOf(id),
+            countOf, { wordsPerPage: ms.wordsPerPage,
+                       charsPerWord: ms.charsPerWord, total });
+        for (const [id, r] of reports) {
+            if (id === null) continue;
+            const card = this.cardEls.get(id);
+            if (card) this.showQuota(card.createDiv(
+                { cls: 'dendrite-count' }), r);
         }
         if (!this.totalEl) return;
-        this.totalEl.empty();
-        const total = count(this.root.children);
-        if (!ms.limit) {
-            this.totalEl.setText(`${total.words.toLocaleString()} words`);
-            return;
+        const top = reports.get(null);
+        if (top) {
+            this.showQuota(this.totalEl, top);
+        } else {
+            const n = countOf(this.root.children);
+            this.totalEl.setText(`${n.words.toLocaleString()} words`);
         }
-        show(this.totalEl.createSpan(), total, ms.limit);
-        // Allocations: the limits of the outermost limited cards, in the
-        // total's unit, against the total.
-        const outer = limited.filter((n) => {
-            for (let p = n.parent; p && p.id; p = p.parent) {
-                if (limited.includes(p)) return false;
-            }
-            return true;
-        }).map((n) => core.parseLimit(this.cardProps(n.id).dendrite_limit))
-            .filter((l) => l.unit === ms.limit.unit);
-        const allocated = outer.reduce((s, l) => s + l.amount, 0);
-        if (allocated > ms.limit.amount) {
-            this.totalEl.createSpan({
-                cls: 'dendrite-over-allocated',
-                text: ` · sections allocated ${allocated} of ` +
-                    core.formatLimit(ms.limit) });
-        }
+    }
+
+    showQuota(el, r) {
+        const q = r.quota;
+        const kind = q.required ? 'required' : 'target';
+        const tilde = (est) => (est ? '~' : '');
+        const used = el.createDiv({ cls: 'dendrite-quota-line' });
+        used.setText(`${tilde(r.usedEstimated)}${core.fmtNum(r.used)} / ` +
+                     `${core.formatLimit(q)}`);
+        used.createSpan({ cls: 'dendrite-quota-kind', text: kind });
+        if (r.used > q.amount) used.addClass(`is-over-${kind}`);
+        if (r.allocated === null) return;
+        const alloc = el.createDiv({ cls: 'dendrite-quota-line ' +
+                                         'dendrite-quota-alloc' });
+        const left = q.amount - r.allocated;
+        alloc.setText(left >= 0 ?
+            `${tilde(r.allocatedEstimated)}${core.fmtNum(r.allocated)} ` +
+                `allocated, ${core.fmtNum(left)} free` :
+            `${tilde(r.allocatedEstimated)}${core.fmtNum(r.allocated)} ` +
+                `allocated, ${core.fmtNum(-left)} over`);
+        if (left < 0) alloc.addClass(`is-over-${kind}`);
+        el.setAttr('aria-label', (r.usedEstimated || r.allocatedEstimated) ?
+            'Figures marked ~ are estimates, from words per page or ' +
+            'characters per word in the manuscript settings.' : '');
     }
 
     async loadBodies() {
@@ -1349,22 +1365,34 @@ class DendriteView extends ItemView {
     }
 }
 
-/** A number and a unit, written back as `500 words` or removed. */
-function limitSetting(container, name, desc, current, onChange) {
-    let amount = current ? String(current.amount) : '';
+/**
+ * A quota: an amount, which may be a fraction such as 1/4, a unit, and
+ * whether the call requires it. Writes `dendrite_limit` and
+ * `dendrite_limit_required` into `draft`, or removes them.
+ */
+function quotaSetting(container, name, desc, current, required, draft) {
+    let amount = current ? core.fmtNum(current.amount) : '';
     let unit = current ? current.unit : 'words';
+    let req = !!required;
     const emit = () => {
-        const n = Number(amount);
-        onChange(amount.trim() && n > 0 ?
-            core.formatLimit({ amount: n, unit }) : null);
+        const n = core.parseAmount(amount);
+        const ok = amount.trim() && n > 0;
+        draft.dendrite_limit = ok ?
+            core.formatLimit({ amount: n, unit }) : null;
+        draft.dendrite_limit_required = ok && req ? true : null;
     };
     new Setting(container).setName(name).setDesc(desc)
-        .addText((t) => t.setPlaceholder('none').setValue(amount)
-            .onChange((v) => { amount = v; emit(); }))
+        .addText((t) => t.setPlaceholder('none, or 500, or 1/4')
+            .setValue(amount).onChange((v) => { amount = v; emit(); }))
         .addDropdown((d) => d.addOption('words', 'words')
             .addOption('characters', 'characters')
             .addOption('pages', 'pages').setValue(unit)
             .onChange((v) => { unit = v; emit(); }));
+    new Setting(container).setName('Required by the call')
+        .setDesc('On: a limit the call sets, shown red when exceeded. ' +
+                 'Off: your own allocation, shown amber.')
+        .addToggle((tg) => tg.setValue(req)
+            .onChange((v) => { req = v; emit(); }));
 }
 
 class ManuscriptModal extends Modal {
@@ -1383,9 +1411,10 @@ class ManuscriptModal extends Modal {
             .setDesc('Starts every card ID in this manuscript. Fixed once ' +
                      'cards exist, since their file names carry it.')
             .addText((t) => t.setValue(ms.prefix || '').setDisabled(true));
-        limitSetting(contentEl, 'Total limit',
-            'For the whole manuscript, shown in the top bar.', ms.limit,
-            (v) => { draft.dendrite_limit = v; });
+        quotaSetting(contentEl, 'Total quota',
+            'For the whole manuscript, shown in the top bar against what ' +
+            'it uses and what its sections allocate.', ms.limit,
+            ms.limitRequired, draft);
         new Setting(contentEl).setName('Count spaces in characters')
             .setDesc('Funding portals differ; check the call.')
             .addToggle((tg) => tg.setValue(ms.countSpaces)
@@ -1396,6 +1425,14 @@ class ManuscriptModal extends Modal {
             .addText((t) => t.setValue(String(ms.wordsPerPage))
                 .onChange((v) => {
                     draft.dendrite_words_per_page = Number(v) > 0 ?
+                        Number(v) : null;
+                }));
+        new Setting(contentEl).setName('Characters per word')
+            .setDesc('Only for comparing quotas set in characters with ' +
+                     'quotas in words or pages, an estimate.')
+            .addText((t) => t.setValue(String(ms.charsPerWord))
+                .onChange((v) => {
+                    draft.dendrite_chars_per_word = Number(v) > 0 ?
                         Number(v) : null;
                 }));
         new Setting(contentEl).setName('Number sections by position')
@@ -1446,11 +1483,11 @@ class CardModal extends Modal {
                     draft.aliases = v.trim() ? [v.trim(), ...rest] :
                         (rest.length ? rest : null);
                 }));
-        limitSetting(contentEl, 'Limit',
-            'A target for this card and everything under it, counted from ' +
-            'what export would write.',
-            core.parseLimit(fm.dendrite_limit),
-            (v) => { draft.dendrite_limit = v; });
+        quotaSetting(contentEl, 'Quota',
+            'For this card and everything under it, counted from what ' +
+            'export would write. Quotas on cards below are allocations ' +
+            'from it.', core.parseLimit(fm.dendrite_limit),
+            fm.dendrite_limit_required === true, draft);
         new Setting(contentEl).addButton((b) => b.setButtonText('Save')
             .setCta().onClick(async () => {
                 const f = view.cardFile(this.id);

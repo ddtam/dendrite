@@ -280,20 +280,83 @@ var require_core = __commonJS({
       }
       return targets;
     }
-    var LIMIT = /^\s*(\d+(?:\.\d+)?)\s*(words?|characters?|chars?|pages?)\s*$/i;
+    var LIMIT = new RegExp("^\\s*(\\d+(?:\\.\\d+)?(?:\\s*/\\s*\\d+(?:\\.\\d+)?)?)\\s*(words?|characters?|chars?|pages?)\\s*$", "i");
+    function parseAmount(text) {
+      const parts = String(text).split("/").map((s) => Number(s.trim()));
+      if (parts.length === 1) return parts[0];
+      if (parts.length === 2 && parts[1]) return parts[0] / parts[1];
+      return NaN;
+    }
     function parseLimit(value) {
       if (value === null || value === void 0 || value === "") return null;
       const m = LIMIT.exec(String(value));
       if (!m) return null;
+      const amount = parseAmount(m[1]);
+      if (!(amount > 0)) return null;
       const u = m[2].toLowerCase();
       const unit = u.startsWith("w") ? "words" : u.startsWith("p") ? "pages" : "characters";
-      return { amount: Number(m[1]), unit };
+      return { amount, unit };
+    }
+    function fmtNum(x) {
+      return Number.isInteger(x) ? x.toLocaleString() : String(Math.round(x * 100) / 100);
     }
     function formatLimit(limit) {
       if (!limit) return "";
       const one = limit.amount === 1;
       const unit = limit.unit === "pages" ? one ? "page" : "pages" : limit.unit === "words" ? one ? "word" : "words" : one ? "character" : "characters";
-      return `${limit.amount} ${unit}`;
+      return `${fmtNum(limit.amount)} ${unit}`;
+    }
+    function convert(amount, from, to, wordsPerPage, charsPerWord) {
+      if (from === to) return { value: amount, estimated: false };
+      const wpp = wordsPerPage || 500;
+      const cpw = charsPerWord || 6;
+      const words = from === "words" ? amount : from === "pages" ? amount * wpp : amount / cpw;
+      const value = to === "words" ? words : to === "pages" ? words / wpp : words * cpw;
+      return { value, estimated: true };
+    }
+    function quotas(root, quotaOf, countOf, opts = {}) {
+      const wpp = opts.wordsPerPage || 500;
+      const cpw = opts.charsPerWord || 6;
+      const out = /* @__PURE__ */ new Map();
+      const nearest = (node) => {
+        const found = [];
+        for (const c of node.children) {
+          if (quotaOf(c.id)) found.push(c);
+          else found.push(...nearest(c));
+        }
+        return found;
+      };
+      const report = (node, quota) => {
+        const nodes = node.id ? [node] : node.children;
+        const n = countOf(nodes);
+        const used = measure(n, quota.unit, wpp);
+        const parts = nearest(node);
+        let allocated = null;
+        let allocatedEstimated = false;
+        if (parts.length) {
+          allocated = 0;
+          for (const p of parts) {
+            const q = quotaOf(p.id);
+            const c = convert(q.amount, q.unit, quota.unit, wpp, cpw);
+            allocated += c.value;
+            allocatedEstimated = allocatedEstimated || c.estimated;
+          }
+        }
+        return {
+          quota,
+          used,
+          usedEstimated: quota.unit === "pages",
+          allocated,
+          allocatedEstimated,
+          parts: parts.map((p) => p.id)
+        };
+      };
+      if (opts.total) out.set(null, report(root, opts.total));
+      for (const n of allNodes(root)) {
+        const q = quotaOf(n.id);
+        if (q) out.set(n.id, report(n, q));
+      }
+      return out;
     }
     function countText(markdown, countSpaces) {
       const plain = stripComments(markdown).replace(/!\[\[[^\]]*\]\]/g, " ").replace(/!\[[^\]]*\]\([^)]*\)/g, " ").replace(/\[\[([^\]|]*\|)?([^\]]*)\]\]/g, "$2").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/\[(@[^\]]+)\]/g, "cite").replace(/^\s{0,3}#{1,6}\s+/gm, "").replace(/^\s*(?:[-*+]|\d+[.)])\s+(?:\[.\]\s+)?/gm, "").replace(/^\s*>\s?/gm, "").replace(/[*_`~=]+/g, "");
@@ -314,6 +377,10 @@ var require_core = __commonJS({
       measure,
       sectionNumbers,
       alignColumns,
+      parseAmount,
+      convert,
+      quotas,
+      fmtNum,
       INDENT,
       splitFrontmatter,
       parseIndex,
@@ -1751,9 +1818,12 @@ var DendriteView = class extends ItemView {
     const fm = this.file && this.app.metadataCache.getFileCache(this.file)?.frontmatter || {};
     const top = Number(fm.dendrite_heading_top);
     const wpp = Number(fm.dendrite_words_per_page);
+    const cpw = Number(fm.dendrite_chars_per_word);
     return {
       prefix: this.prefix(),
       limit: core.parseLimit(fm.dendrite_limit),
+      limitRequired: fm.dendrite_limit_required === true,
+      charsPerWord: cpw > 0 ? cpw : 6,
       countSpaces: fm.dendrite_count_spaces !== false,
       wordsPerPage: wpp > 0 ? wpp : 500,
       headingTop: top >= 1 && top <= 6 ? top : this.plugin.settings.headingTop,
@@ -1808,62 +1878,83 @@ var DendriteView = class extends ItemView {
    * only when some limit is set, so a manuscript without limits pays
    * nothing for this.
    */
+  /** A card's quota, with whether the call requires it. */
+  quotaOf(id) {
+    const fm = this.cardProps(id);
+    const q = core.parseLimit(fm.dendrite_limit);
+    return q ? Object.assign(q, {
+      required: fm.dendrite_limit_required === true
+    }) : null;
+  }
+  /**
+   * Each card with a quota shows what it uses against it and what the
+   * quotas below it allocate; the bar does the same for the manuscript
+   * total. Over a required quota is an error, over a target a warning.
+   * Card text is read only when some quota is set.
+   */
   async updateCounts() {
     if (!this.file || !this.board) return;
     const ms = this.manuscript();
-    const limited = core.allNodes(this.root).filter(
-      (n) => core.parseLimit(this.cardProps(n.id).dendrite_limit)
-    );
     for (const card of this.cardEls.values()) {
       const old = card.querySelector(".dendrite-count");
       if (old) old.remove();
     }
-    if (!ms.limit && !limited.length) {
-      if (this.totalEl) this.totalEl.empty();
-      return;
-    }
+    if (this.totalEl) this.totalEl.empty();
+    const any = ms.limit || core.allNodes(this.root).some(
+      (n) => this.quotaOf(n.id)
+    );
+    if (!any) return;
     const bodies = await this.loadBodies();
     const bodyOf = (id) => this.editing && this.editing.id === id ? this.editing.editor.value : bodies.get(id);
-    const count = (nodes) => core.countText(
+    const countOf = (nodes) => core.countText(
       core.exportMarkdown(nodes, bodyOf, 1),
       ms.countSpaces
     );
-    const show = (el, n, limit) => {
-      const have = core.measure(n, limit.unit, ms.wordsPerPage);
-      const over = have > limit.amount;
-      const fmt = limit.unit === "pages" ? `~${have.toFixed(1)} / ${core.formatLimit(limit)} (estimate)` : `${Math.round(have).toLocaleString()} / ` + core.formatLimit(limit);
-      el.setText(fmt);
-      el.toggleClass("is-over", over);
-    };
-    for (const n of limited) {
-      const card = this.cardEls.get(n.id);
-      if (!card) continue;
-      const el = card.createDiv({ cls: "dendrite-count" });
-      show(el, count([n]), core.parseLimit(
-        this.cardProps(n.id).dendrite_limit
-      ));
+    const total = ms.limit ? Object.assign(
+      {},
+      ms.limit,
+      { required: ms.limitRequired }
+    ) : null;
+    const reports = core.quotas(
+      this.root,
+      (id) => this.quotaOf(id),
+      countOf,
+      {
+        wordsPerPage: ms.wordsPerPage,
+        charsPerWord: ms.charsPerWord,
+        total
+      }
+    );
+    for (const [id, r] of reports) {
+      if (id === null) continue;
+      const card = this.cardEls.get(id);
+      if (card) this.showQuota(card.createDiv(
+        { cls: "dendrite-count" }
+      ), r);
     }
     if (!this.totalEl) return;
-    this.totalEl.empty();
-    const total = count(this.root.children);
-    if (!ms.limit) {
-      this.totalEl.setText(`${total.words.toLocaleString()} words`);
-      return;
+    const top = reports.get(null);
+    if (top) {
+      this.showQuota(this.totalEl, top);
+    } else {
+      const n = countOf(this.root.children);
+      this.totalEl.setText(`${n.words.toLocaleString()} words`);
     }
-    show(this.totalEl.createSpan(), total, ms.limit);
-    const outer = limited.filter((n) => {
-      for (let p = n.parent; p && p.id; p = p.parent) {
-        if (limited.includes(p)) return false;
-      }
-      return true;
-    }).map((n) => core.parseLimit(this.cardProps(n.id).dendrite_limit)).filter((l) => l.unit === ms.limit.unit);
-    const allocated = outer.reduce((s, l) => s + l.amount, 0);
-    if (allocated > ms.limit.amount) {
-      this.totalEl.createSpan({
-        cls: "dendrite-over-allocated",
-        text: ` \xB7 sections allocated ${allocated} of ` + core.formatLimit(ms.limit)
-      });
-    }
+  }
+  showQuota(el, r) {
+    const q = r.quota;
+    const kind = q.required ? "required" : "target";
+    const tilde = (est) => est ? "~" : "";
+    const used = el.createDiv({ cls: "dendrite-quota-line" });
+    used.setText(`${tilde(r.usedEstimated)}${core.fmtNum(r.used)} / ${core.formatLimit(q)}`);
+    used.createSpan({ cls: "dendrite-quota-kind", text: kind });
+    if (r.used > q.amount) used.addClass(`is-over-${kind}`);
+    if (r.allocated === null) return;
+    const alloc = el.createDiv({ cls: "dendrite-quota-line dendrite-quota-alloc" });
+    const left = q.amount - r.allocated;
+    alloc.setText(left >= 0 ? `${tilde(r.allocatedEstimated)}${core.fmtNum(r.allocated)} allocated, ${core.fmtNum(left)} free` : `${tilde(r.allocatedEstimated)}${core.fmtNum(r.allocated)} allocated, ${core.fmtNum(-left)} over`);
+    if (left < 0) alloc.addClass(`is-over-${kind}`);
+    el.setAttr("aria-label", r.usedEstimated || r.allocatedEstimated ? "Figures marked ~ are estimates, from words per page or characters per word in the manuscript settings." : "");
   }
   async loadBodies() {
     this.bodies = this.bodies || /* @__PURE__ */ new Map();
@@ -1923,18 +2014,25 @@ var DendriteView = class extends ItemView {
     new Notice(`Dendrite: exported to ${path}`);
   }
 };
-function limitSetting(container, name, desc, current, onChange) {
-  let amount = current ? String(current.amount) : "";
+function quotaSetting(container, name, desc, current, required, draft) {
+  let amount = current ? core.fmtNum(current.amount) : "";
   let unit = current ? current.unit : "words";
+  let req = !!required;
   const emit = () => {
-    const n = Number(amount);
-    onChange(amount.trim() && n > 0 ? core.formatLimit({ amount: n, unit }) : null);
+    const n = core.parseAmount(amount);
+    const ok = amount.trim() && n > 0;
+    draft.dendrite_limit = ok ? core.formatLimit({ amount: n, unit }) : null;
+    draft.dendrite_limit_required = ok && req ? true : null;
   };
-  new Setting(container).setName(name).setDesc(desc).addText((t) => t.setPlaceholder("none").setValue(amount).onChange((v) => {
+  new Setting(container).setName(name).setDesc(desc).addText((t) => t.setPlaceholder("none, or 500, or 1/4").setValue(amount).onChange((v) => {
     amount = v;
     emit();
   })).addDropdown((d) => d.addOption("words", "words").addOption("characters", "characters").addOption("pages", "pages").setValue(unit).onChange((v) => {
     unit = v;
+    emit();
+  }));
+  new Setting(container).setName("Required by the call").setDesc("On: a limit the call sets, shown red when exceeded. Off: your own allocation, shown amber.").addToggle((tg) => tg.setValue(req).onChange((v) => {
+    req = v;
     emit();
   }));
 }
@@ -1950,20 +2048,22 @@ var ManuscriptModal = class extends Modal {
     const draft = {};
     this.titleEl.setText(`${view.file.basename}: settings`);
     new Setting(contentEl).setName("Prefix").setDesc("Starts every card ID in this manuscript. Fixed once cards exist, since their file names carry it.").addText((t) => t.setValue(ms.prefix || "").setDisabled(true));
-    limitSetting(
+    quotaSetting(
       contentEl,
-      "Total limit",
-      "For the whole manuscript, shown in the top bar.",
+      "Total quota",
+      "For the whole manuscript, shown in the top bar against what it uses and what its sections allocate.",
       ms.limit,
-      (v) => {
-        draft.dendrite_limit = v;
-      }
+      ms.limitRequired,
+      draft
     );
     new Setting(contentEl).setName("Count spaces in characters").setDesc("Funding portals differ; check the call.").addToggle((tg) => tg.setValue(ms.countSpaces).onChange((v) => {
       draft.dendrite_count_spaces = v;
     }));
     new Setting(contentEl).setName("Words per page").setDesc("Only for page estimates while writing. The real count depends on the final layout.").addText((t) => t.setValue(String(ms.wordsPerPage)).onChange((v) => {
       draft.dendrite_words_per_page = Number(v) > 0 ? Number(v) : null;
+    }));
+    new Setting(contentEl).setName("Characters per word").setDesc("Only for comparing quotas set in characters with quotas in words or pages, an estimate.").addText((t) => t.setValue(String(ms.charsPerWord)).onChange((v) => {
+      draft.dendrite_chars_per_word = Number(v) > 0 ? Number(v) : null;
     }));
     new Setting(contentEl).setName("Number sections by position").setDesc("Write headings without numbers; sections are numbered from where they sit, and renumber when moved.").addToggle((tg) => tg.setValue(ms.number).onChange((v) => {
       draft.dendrite_number_sections = v;
@@ -2000,14 +2100,13 @@ var CardModal = class extends Modal {
       const rest = aliases.slice(1);
       draft.aliases = v.trim() ? [v.trim(), ...rest] : rest.length ? rest : null;
     }));
-    limitSetting(
+    quotaSetting(
       contentEl,
-      "Limit",
-      "A target for this card and everything under it, counted from what export would write.",
+      "Quota",
+      "For this card and everything under it, counted from what export would write. Quotas on cards below are allocations from it.",
       core.parseLimit(fm.dendrite_limit),
-      (v) => {
-        draft.dendrite_limit = v;
-      }
+      fm.dendrite_limit_required === true,
+      draft
     );
     new Setting(contentEl).addButton((b) => b.setButtonText("Save").setCta().onClick(async () => {
       const f = view.cardFile(this.id);

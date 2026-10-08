@@ -378,17 +378,37 @@ function alignColumns(cols, active, pos, heights) {
 
 // ---- limits and counts ---------------------------------------------------
 
-const LIMIT = /^\s*(\d+(?:\.\d+)?)\s*(words?|characters?|chars?|pages?)\s*$/i;
+const LIMIT = new RegExp('^\\s*(\\d+(?:\\.\\d+)?(?:\\s*/\\s*\\d+(?:\\.\\d+)?)?)' +
+                         '\\s*(words?|characters?|chars?|pages?)\\s*$', 'i');
 
-/** `500 words`, `2000 characters`, `1 page`; null if unset or unreadable. */
+/** `12`, `0.5` or `1/4` as a number; NaN if unreadable. */
+function parseAmount(text) {
+    const parts = String(text).split('/').map((s) => Number(s.trim()));
+    if (parts.length === 1) return parts[0];
+    if (parts.length === 2 && parts[1]) return parts[0] / parts[1];
+    return NaN;
+}
+
+/**
+ * `500 words`, `2000 characters`, `1 page`, `1/4 page`; null if unset or
+ * unreadable.
+ */
 function parseLimit(value) {
     if (value === null || value === undefined || value === '') return null;
     const m = LIMIT.exec(String(value));
     if (!m) return null;
+    const amount = parseAmount(m[1]);
+    if (!(amount > 0)) return null;
     const u = m[2].toLowerCase();
     const unit = u.startsWith('w') ? 'words' :
         (u.startsWith('p') ? 'pages' : 'characters');
-    return { amount: Number(m[1]), unit };
+    return { amount, unit };
+}
+
+/** A number for display: whole, or up to two decimals. */
+function fmtNum(x) {
+    return Number.isInteger(x) ? x.toLocaleString() :
+        String(Math.round(x * 100) / 100);
 }
 
 function formatLimit(limit) {
@@ -397,7 +417,75 @@ function formatLimit(limit) {
     const unit = limit.unit === 'pages' ? (one ? 'page' : 'pages') :
         limit.unit === 'words' ? (one ? 'word' : 'words') :
             (one ? 'character' : 'characters');
-    return `${limit.amount} ${unit}`;
+    return `${fmtNum(limit.amount)} ${unit}`;
+}
+
+/**
+ * An amount in another unit. Pages convert through words per page and
+ * characters through characters per word; both are estimates, so the
+ * result says whether one was used.
+ */
+function convert(amount, from, to, wordsPerPage, charsPerWord) {
+    if (from === to) return { value: amount, estimated: false };
+    const wpp = wordsPerPage || 500;
+    const cpw = charsPerWord || 6;
+    const words = from === 'words' ? amount :
+        from === 'pages' ? amount * wpp : amount / cpw;
+    const value = to === 'words' ? words :
+        to === 'pages' ? words / wpp : words * cpw;
+    return { value, estimated: true };
+}
+
+/**
+ * Quotas that waterfall down the tree. Each card with a quota is
+ * measured against it, and against it are set the quotas of its nearest
+ * descendants that carry one, its allocations. The manuscript's total,
+ * if any, is the quota of the root.
+ *
+ * `quotaOf(id)` gives { amount, unit, required } or null; `countOf(nodes)`
+ * gives { words, chars } for what export would write for those nodes.
+ * Returns id -> report, with the root's under null:
+ *   { quota, used, usedEstimated, allocated, allocatedEstimated, parts }
+ * where allocated is null when nothing below carries a quota.
+ */
+function quotas(root, quotaOf, countOf, opts = {}) {
+    const wpp = opts.wordsPerPage || 500;
+    const cpw = opts.charsPerWord || 6;
+    const out = new Map();
+    const nearest = (node) => {
+        const found = [];
+        for (const c of node.children) {
+            if (quotaOf(c.id)) found.push(c);
+            else found.push(...nearest(c));
+        }
+        return found;
+    };
+    const report = (node, quota) => {
+        const nodes = node.id ? [node] : node.children;
+        const n = countOf(nodes);
+        const used = measure(n, quota.unit, wpp);
+        const parts = nearest(node);
+        let allocated = null;
+        let allocatedEstimated = false;
+        if (parts.length) {
+            allocated = 0;
+            for (const p of parts) {
+                const q = quotaOf(p.id);
+                const c = convert(q.amount, q.unit, quota.unit, wpp, cpw);
+                allocated += c.value;
+                allocatedEstimated = allocatedEstimated || c.estimated;
+            }
+        }
+        return { quota, used, usedEstimated: quota.unit === 'pages',
+                 allocated, allocatedEstimated,
+                 parts: parts.map((p) => p.id) };
+    };
+    if (opts.total) out.set(null, report(root, opts.total));
+    for (const n of allNodes(root)) {
+        const q = quotaOf(n.id);
+        if (q) out.set(n.id, report(n, q));
+    }
+    return out;
 }
 
 /**
@@ -433,7 +521,7 @@ function measure(count, unit, wordsPerPage) {
 
 module.exports = {
     parseLimit, formatLimit, countText, measure, sectionNumbers,
-    alignColumns,
+    alignColumns, parseAmount, convert, quotas, fmtNum,
     INDENT, splitFrontmatter, parseIndex, serialiseTree, writeIndexText,
     deriveLabel, stripComments, validPrefix, newId, makeNode, makeRoot,
     insertSibling, appendChild, moveWithin, indent, outdent, remove,

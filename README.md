@@ -81,12 +81,20 @@ On a phone, the active card's toolbar offers the same actions.
 
 **Settings** in the bar edits the manuscript's properties on its index note: a total limit, whether characters count spaces, words per page for page estimates, numbering, and the top heading level for export. The **sliders** button on a card edits its label and its limit.
 
-A limit is in words, characters or pages, and is counted from what export would write for that card's branch, so planning text and comments never count. Pages are an estimate from words per page. The bar shows the manuscript's total, and warns when the sections' limits add up to more than the total.
+### Quotas
+
+A quota is in words, characters or pages, fractions allowed (`1/4 page`), and is **required** (set by the call) or a **target** (your own allocation). It is counted from what export would write for that card's branch, so planning text and comments never count.
+
+Quotas waterfall down the tree. A card's **allocations** are the quotas of the nearest cards below it that carry one, and its card shows both what its branch uses against its quota and what is allocated against it, free or over. The bar does the same for the manuscript's total quota. Going over a required quota shows red; over a target, amber.
+
+Quotas in different units are compared by converting through **words per page** and **characters per word**, both manuscript settings. Pages and converted figures are estimates and are marked `~`; an exact page count needs the final layout.
 
 | Property | Where | Holds |
 | --- | --- | --- |
 | `dendrite_prefix` | index | the card ID prefix |
-| `dendrite_limit` | index or card | `500 words`, `2000 characters`, `1 page` |
+| `dendrite_limit` | index or card | a quota: `500 words`, `2000 characters`, `0.25 pages` |
+| `dendrite_limit_required` | index or card | `true` if the call sets the quota |
+| `dendrite_chars_per_word` | index | for comparing character quotas, default 6 |
 | `dendrite_count_spaces` | index | `false` to count characters without spaces |
 | `dendrite_words_per_page` | index | for page estimates, default 500 |
 | `dendrite_number_sections` | index | `true` to number sections by position |

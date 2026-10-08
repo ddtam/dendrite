@@ -330,10 +330,27 @@
     margin-left: 12px;
 }
 
-.dendrite-count.is-over,
-.dendrite-total .is-over,
-.dendrite-over-allocated {
+.dendrite-total {
+    display: flex;
+    gap: 10px;
+}
+
+.dendrite-quota-kind {
+    margin-left: 6px;
+    padding: 0 4px;
+    border-radius: var(--radius-s);
+    background: var(--background-modifier-hover);
+    font-size: 0.9em;
+}
+
+/* Over a quota the call sets is an error; over one's own allocation is
+   a warning, a plan to revise. */
+.dendrite-quota-line.is-over-required {
     color: var(--text-error);
+}
+
+.dendrite-quota-line.is-over-target {
+    color: var(--color-orange, var(--text-warning));
 }
 
 .dendrite-mode {

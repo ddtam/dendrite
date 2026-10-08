@@ -200,26 +200,38 @@ test('numbering shows on section cards and never enters their notes',
                  '# 1. Methods\n\n# 2. Outline\n\n## 2.1 Sub\n\nText.\n');
 });
 
-test('a card limit is counted from its branch and marked when over',
+test('quotas show use and allocations, red if required and amber if not',
      async () => {
     const { view, app } = await open(
-        '---\ndendrite_prefix: G\ndendrite_limit: 5 words\n---\n' +
+        '---\ndendrite_prefix: G\ndendrite_limit: 1 page\n' +
+        'dendrite_limit_required: true\ndendrite_words_per_page: 10\n---\n' +
         '- [[G-aaaaa|Aims]]\n    - [[G-bbbbb|p]]\n',
         { 'G-aaaaa': '---\ndendrite_limit: 3 words\n---\n# Aims\nplan',
-          'G-bbbbb': 'one two three %%not counted%%' });
+          'G-bbbbb': '---\ndendrite_limit: 2 words\n---\n' +
+                     'one two three %%not counted%%' });
     await view.updateCounts();
-    const badge = () => view.cardEls.get('G-aaaaa')
-        .querySelector('.dendrite-count');
-    assert.equal(badge().textContent, '4 / 3 words');
-    assert.ok(badge().hasClass('is-over'));
-    assert.match(view.totalEl.textContent, /^4 \/ 5 words/);
+    const lines = (id) => [...view.cardEls.get(id)
+        .querySelectorAll('.dendrite-quota-line')];
+    const [used, alloc] = lines('G-aaaaa');
+    assert.equal(used.firstChild.textContent, '4 / 3 words');
+    assert.equal(used.querySelector('.dendrite-quota-kind').textContent,
+                 'target');
+    assert.ok(used.hasClass('is-over-target'), 'over a target: amber');
+    assert.equal(alloc.textContent, '2 allocated, 1 free');
+    const top = [...view.totalEl.querySelectorAll('.dendrite-quota-line')];
+    assert.equal(top[0].firstChild.textContent, '~0.4 / 1 page',
+                 'pages are an estimate');
+    assert.equal(top[1].textContent, '~0.3 allocated, 0.7 free');
     const f = view.cardFile('G-aaaaa');
     await app.fileManager.processFrontMatter(f, (fm) => {
-        fm.dendrite_limit = '10 words';
+        fm.dendrite_limit = '1 word';
+        fm.dendrite_limit_required = true;
     });
     await view.updateCounts();
-    assert.equal(badge().textContent, '4 / 10 words');
-    assert.ok(!badge().hasClass('is-over'));
+    const [u2, a2] = lines('G-aaaaa');
+    assert.ok(u2.hasClass('is-over-required'), 'over a requirement: red');
+    assert.equal(a2.textContent, '2 allocated, 1 over');
+    assert.ok(a2.hasClass('is-over-required'));
 });
 
 test('bold, tab and list enter edit the card and are saved', async () => {
