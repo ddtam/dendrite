@@ -217,6 +217,8 @@ const obsidian = {
         }
         registerEvent() {}
         registerDomEvent(el, ev, fn) { el.addEventListener(ev, fn); }
+        addChild(c) { c.load(); return c; }
+        removeChild(c) { c.unload(); return c; }
         setState() { return Promise.resolve(); }
     },
     Plugin: class {},

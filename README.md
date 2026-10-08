@@ -35,7 +35,9 @@ Opening an index note shows it in Dendrite; **Index** in the view's bar opens it
 
 A **section card** starts with a heading line, `# Research Outline`. The `#` marks the line as a heading; its level comes from the card's depth, so you never choose it. Write numbers into headings yourself, or turn on **Number sections by position** in the manuscript's settings and leave them out: sections are then numbered from where they sit, `1.`, `1.2`, in the view and in export, and renumber when moved. The numbers are never written into your notes.
 
-In the editor:
+Cards are edited in Obsidian's own editor, so live preview, `[[` link suggestions, citation suggestions from other plugins, and Obsidian's editor commands and hotkeys all work inside a card. Escape leaves the card, after closing any open suggestion list first.
+
+Obsidian has no public API for putting its editor inside another view, so Dendrite reaches it the way several plugins do, through the editor of an embedded note. If that fails, as an Obsidian update could make it, or if **Use Obsidian's editor in cards** is off, cards use a plain text box instead, which saves the same way. In the text box:
 
 | Key | Action |
 | --- | --- |

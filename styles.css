@@ -357,3 +357,37 @@
     box-shadow: 0 0 0 2px var(--interactive-accent),
                 0 6px 18px rgba(0, 0, 0, 0.16);
 }
+
+/* Obsidian's editor inside a card: as tall as its text, no scroller, no
+   page margins or readable-width limit, so it sits in the card like the
+   rendered text it replaces. */
+.dendrite-cm .cm-editor {
+    height: auto;
+}
+
+.dendrite-cm .cm-scroller {
+    overflow: visible;
+    padding: 0 !important;
+    font-family: var(--font-text);
+}
+
+.dendrite-cm .cm-sizer,
+.dendrite-cm .cm-contentContainer,
+.dendrite-cm .cm-content,
+.dendrite-cm .markdown-source-view.mod-cm6 .cm-content {
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    min-height: 3em;
+}
+
+.dendrite-cm .cm-gutters,
+.dendrite-cm .inline-title,
+.dendrite-cm .metadata-container,
+.dendrite-cm .embedded-backlinks {
+    display: none !important;
+}
+
+.dendrite-cm .cm-editor.cm-focused {
+    outline: none;
+}

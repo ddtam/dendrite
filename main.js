@@ -390,6 +390,173 @@ var require_textedit = __commonJS({
   }
 });
 
+// src/editor.js
+var require_editor = __commonJS({
+  "src/editor.js"(exports2, module2) {
+    "use strict";
+    var { Scope: Scope2 } = require("obsidian");
+    var EditorClass = null;
+    var resolveFailed = false;
+    function markdownEditorClass(app) {
+      if (EditorClass || resolveFailed) return EditorClass;
+      try {
+        const embed = app.embedRegistry.embedByExtension.md(
+          { app, containerEl: createDiv(), state: {} },
+          null,
+          ""
+        );
+        embed.editable = true;
+        embed.showEditor();
+        const proto = Object.getPrototypeOf(
+          Object.getPrototypeOf(embed.editMode)
+        );
+        embed.unload();
+        EditorClass = proto && proto.constructor;
+        if (typeof EditorClass !== "function") throw new Error("no class");
+      } catch (err) {
+        resolveFailed = true;
+        EditorClass = null;
+        console.warn("Dendrite: Obsidian's editor is unavailable; cards use the text box.", err);
+      }
+      return EditorClass;
+    }
+    function obsidianEditor(app, parent, opts) {
+      const Base = markdownEditorClass(app);
+      if (!Base) return null;
+      class CardEditor extends Base {
+        constructor(container) {
+          super(app, container, {
+            app,
+            onMarkdownScroll: () => {
+            },
+            getMode: () => "source"
+          });
+          this.cardOpts = opts;
+          this.scope = new Scope2(app.scope);
+          this.scope.register([], "Escape", () => {
+            opts.onEscape();
+            return false;
+          });
+          this.owner.editMode = this;
+          this.owner.editor = this.editor;
+          this.owner.file = opts.file;
+          this.set(opts.value || "", false);
+          const content = this.editor.cm.contentDOM;
+          content.addEventListener("focusin", () => {
+            app.keymap.pushScope(this.scope);
+            app.workspace.activeEditor = this.owner;
+          });
+          content.addEventListener("blur", () => {
+            app.keymap.popScope(this.scope);
+            if (this._loaded) opts.onBlur();
+          });
+          const ws = app.workspace;
+          const original = ws.setActiveLeaf;
+          const self = this;
+          const patched = function(...args) {
+            if (self.editor && self.editor.cm && self.editor.cm.hasFocus) {
+              return void 0;
+            }
+            return original.apply(this, args);
+          };
+          ws.setActiveLeaf = patched;
+          this.register(() => {
+            if (ws.setActiveLeaf === patched) ws.setActiveLeaf = original;
+          });
+        }
+        onUpdate(update, changed) {
+          super.onUpdate(update, changed);
+          if (changed) this.cardOpts.onChange();
+        }
+        onunload() {
+          super.onunload();
+          app.keymap.popScope(this.scope);
+          if (app.workspace.activeEditor === this.owner) {
+            app.workspace.activeEditor = null;
+          }
+        }
+      }
+      const el = createDiv({ cls: "dendrite-cm" });
+      let ed;
+      try {
+        ed = new CardEditor(el);
+        parent.addChild(ed);
+        if (!ed.editor || !ed.editor.cm) throw new Error("no CodeMirror");
+      } catch (err) {
+        console.warn("Dendrite: Obsidian's editor failed to start; using the text box.", err);
+        if (ed) {
+          try {
+            parent.removeChild(ed);
+          } catch (e) {
+          }
+        }
+        return null;
+      }
+      return {
+        kind: "obsidian",
+        el,
+        get value() {
+          return ed.editor.cm.state.doc.toString();
+        },
+        focus(atStart) {
+          const editor = ed.editor;
+          editor.focus();
+          if (atStart) {
+            editor.setCursor({ line: 0, ch: 0 });
+          } else {
+            const last = editor.lastLine();
+            editor.setCursor({
+              line: last,
+              ch: editor.getLine(last).length
+            });
+          }
+        },
+        destroy() {
+          parent.removeChild(ed);
+        }
+      };
+    }
+    function textEditor(opts) {
+      const ta = createEl("textarea", { cls: "dendrite-editor" });
+      ta.value = opts.value || "";
+      const fit = () => {
+        ta.style.height = "auto";
+        ta.style.height = ta.scrollHeight + "px";
+      };
+      ta.addEventListener("input", () => {
+        fit();
+        opts.onChange();
+      });
+      ta.addEventListener("blur", () => opts.onBlur());
+      return {
+        kind: "text",
+        el: ta,
+        ta,
+        get value() {
+          return ta.value;
+        },
+        focus(atStart) {
+          fit();
+          ta.focus();
+          const at = atStart ? 0 : ta.value.length;
+          ta.setSelectionRange(at, at);
+        },
+        destroy() {
+          ta.remove();
+        }
+      };
+    }
+    function cardEditor2(app, parent, opts, useObsidian) {
+      return useObsidian && obsidianEditor(app, parent, opts) || textEditor(opts);
+    }
+    function resetForTests() {
+      EditorClass = null;
+      resolveFailed = false;
+    }
+    module2.exports = { cardEditor: cardEditor2, textEditor, resetForTests };
+  }
+});
+
 // src/main.js
 var {
   ItemView,
@@ -410,6 +577,7 @@ var {
 } = require("obsidian");
 var core = require_core();
 var textedit = require_textedit();
+var { cardEditor } = require_editor();
 var VIEW = "dendrite-view";
 var DEFAULTS = {
   writingFolder: "Writing",
@@ -420,6 +588,7 @@ var DEFAULTS = {
   vimKeys: true,
   manageLinter: true,
   lintCards: true,
+  obsidianEditor: true,
   // The Linter ignore entry Dendrite added itself, if any, so that only
   // that entry is ever removed again.
   linterAdded: null
@@ -524,7 +693,7 @@ var DendriteView = class extends ItemView {
     );
     this.registerDomEvent(this.contentEl, "contextmenu", async (e) => {
       const card = e.target.closest(".dendrite-card");
-      if (!card || e.target.closest("textarea")) return;
+      if (!card || e.target.closest("textarea, .dendrite-cm")) return;
       e.preventDefault();
       await this.select(card.dataset.id);
       this.cardMenu(card, e);
@@ -731,7 +900,7 @@ var DendriteView = class extends ItemView {
     const cached = this.rendered.get(n.id);
     const f = this.cardFile(n.id);
     if (this.editing && this.editing.id === n.id) {
-      body.appendChild(this.editing.ta);
+      body.appendChild(this.editing.editor.el);
     } else if (cached && f && cached.mtime === f.stat.mtime) {
       body.appendChild(cached.el);
     } else {
@@ -1006,7 +1175,7 @@ var DendriteView = class extends ItemView {
       );
       return;
     }
-    if (e.target.closest(".dendrite-toolbar, textarea, button")) return;
+    if (e.target.closest(".dendrite-toolbar, textarea, .dendrite-cm, button")) return;
     const card = e.target.closest(".dendrite-card");
     if (card) this.select(card.dataset.id);
     this.contentEl.focus();
@@ -1113,6 +1282,7 @@ var DendriteView = class extends ItemView {
   editKey(cmd) {
     const ed = this.editing;
     if (!ed) return cmd !== "indent" && cmd !== "outdent";
+    if (!ed.ta) return true;
     const ta = ed.ta;
     const v = ta.value;
     const s = ta.selectionStart;
@@ -1146,49 +1316,48 @@ var DendriteView = class extends ItemView {
     let f = this.cardFile(id);
     if (!f) f = await this.createCardFile(id);
     const raw = await this.app.vault.read(f);
-    const ta = createEl("textarea", { cls: "dendrite-editor" });
-    ta.value = core.splitFrontmatter(raw).body;
     const ed = {
       id,
       file: f,
-      ta,
       dirty: false,
       timer: null,
       saving: Promise.resolve()
     };
+    const editor = cardEditor(this.app, this, {
+      value: core.splitFrontmatter(raw).body,
+      file: f,
+      onChange: () => {
+        ed.dirty = true;
+        ed.changed = true;
+        this.centre(false);
+        this.scheduleCounts();
+        clearTimeout(ed.timer);
+        ed.timer = setTimeout(
+          () => this.save(ed),
+          this.plugin.settings.autosaveMs
+        );
+      },
+      onBlur: () => {
+        this.save(ed);
+      },
+      onEscape: () => {
+        this.endEdit();
+      }
+    }, this.plugin.settings.obsidianEditor !== false);
+    ed.editor = editor;
+    ed.ta = editor.ta || null;
     this.editing = ed;
-    const fit = () => {
-      ta.style.height = "auto";
-      ta.style.height = ta.scrollHeight + "px";
-    };
-    ta.addEventListener("input", () => {
-      ed.dirty = true;
-      ed.changed = true;
-      fit();
-      this.centre(false);
-      this.scheduleCounts();
-      clearTimeout(ed.timer);
-      ed.timer = setTimeout(
-        () => this.save(ed),
-        this.plugin.settings.autosaveMs
-      );
-    });
-    ta.addEventListener("blur", () => {
-      this.save(ed);
-    });
     const card = this.cardEls.get(id);
     if (card) {
       const body = card.querySelector(".dendrite-card-body");
       body.empty();
-      body.appendChild(ta);
+      body.appendChild(editor.el);
       card.addClass("is-editing");
+      card.toggleClass("has-obsidian-editor", editor.kind === "obsidian");
       card.removeClass("is-pending");
     }
     this.renderToolbar();
-    fit();
-    ta.focus();
-    const at = atStart ? 0 : ta.value.length;
-    ta.setSelectionRange(at, at);
+    editor.focus(atStart);
     this.showMode();
   }
   /** Write the editor's text to its card, keeping the frontmatter. */
@@ -1196,7 +1365,7 @@ var DendriteView = class extends ItemView {
     clearTimeout(ed.timer);
     if (!ed.dirty) return ed.saving;
     ed.dirty = false;
-    const text = ed.ta.value;
+    const text = ed.editor.value;
     ed.saving = ed.saving.then(() => this.app.vault.process(
       ed.file,
       (data) => core.splitFrontmatter(data).fm + text
@@ -1215,11 +1384,13 @@ var DendriteView = class extends ItemView {
     if (!ed) return;
     await this.save(ed);
     this.editing = null;
+    ed.editor.destroy();
     if (ed.changed) await this.plugin.lintCard(ed.file);
     this.invalidate(ed.id);
     const card = this.cardEls.get(ed.id);
     if (card) {
       card.removeClass("is-editing");
+      card.removeClass("has-obsidian-editor");
       card.addClass("is-pending");
     }
     await this.renderCard(ed.id);
@@ -1517,7 +1688,7 @@ var DendriteView = class extends ItemView {
   /** Whether a card's text opens with a heading, from Obsidian's cache. */
   hasHeading(id) {
     if (this.editing && this.editing.id === id) {
-      return /^\s*#{1,6}\s/.test(this.editing.ta.value);
+      return /^\s*#{1,6}\s/.test(this.editing.editor.value);
     }
     const f = this.cardFile(id);
     const sections = f && this.app.metadataCache.getFileCache(f)?.sections;
@@ -1573,7 +1744,7 @@ var DendriteView = class extends ItemView {
       return;
     }
     const bodies = await this.loadBodies();
-    const bodyOf = (id) => this.editing && this.editing.id === id ? this.editing.ta.value : bodies.get(id);
+    const bodyOf = (id) => this.editing && this.editing.id === id ? this.editing.editor.value : bodies.get(id);
     const count = (nodes) => core.countText(
       core.exportMarkdown(nodes, bodyOf, 1),
       ms.countSpaces
@@ -1833,6 +2004,10 @@ var DendriteSettings = class extends PluginSettingTab {
     }));
     new Setting(containerEl).setName("Clean up cards with Linter").setDesc(`When you leave a card you changed, run the Linter plugin's rules on it, except those that break cards, such as "File name heading".`).addToggle((tg) => tg.setValue(s.lintCards).onChange((v) => {
       s.lintCards = v;
+      save();
+    }));
+    new Setting(containerEl).setName("Use Obsidian's editor in cards").setDesc("Live preview, link and citation suggestions, and editor commands inside a card. Off, or if Obsidian's editor cannot start, cards use a plain text box.").addToggle((tg) => tg.setValue(s.obsidianEditor).onChange((v) => {
+      s.obsidianEditor = v;
       save();
     }));
     new Setting(containerEl).setName("Top section heading level").setDesc("Export writes a top-level section card as this heading level, deeper sections one level down each.").addDropdown((d) => {

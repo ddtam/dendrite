@@ -474,3 +474,77 @@ test('a card changing height redraws the flow', async () => {
     await tick(5);
     assert.equal(draws, 1);
 });
+
+test('Obsidian\'s editor: typing saves, Escape leaves, and it is torn down',
+     async () => {
+    const edmod = require('../src/editor.js');
+    let made = null;
+    class FakeMarkdownEditor {
+        constructor(app, container, owner) {
+            this.app = app;
+            this.owner = owner;
+            this.doc = '';
+            this.cbs = [];
+            const contentDOM = createDiv();
+            container.appendChild(contentDOM);
+            const self = this;
+            this.editor = {
+                cm: { contentDOM, hasFocus: false,
+                      state: { doc: { toString: () => self.doc } } },
+                focus() {}, setCursor(c) { this.cursor = c; },
+                lastLine() { return 0; },
+                getLine() { return self.doc; },
+            };
+            made = this;
+        }
+        set(v) { this.doc = v; }
+        onUpdate() {}
+        register(fn) { this.cbs.push(fn); }
+        load() { this._loaded = true; }
+        unload() {
+            this._loaded = false;
+            this.onunload();
+            this.cbs.forEach((f) => f());
+            this.unloaded = true;
+        }
+        onunload() {}
+    }
+    const { view, app, read } = await open(
+        '---\ndendrite_prefix: G\n---\n- [[G-aaaaa|A]]\n',
+        { 'G-aaaaa': 'Start' });
+    const scopes = [];
+    app.keymap = { pushScope: (s) => scopes.push(s), popScope() {} };
+    const original = () => 'leaf';
+    app.workspace.setActiveLeaf = original;
+    app.embedRegistry = { embedByExtension: { md: () => ({
+        showEditor() {}, unload() {},
+        editMode: Object.create(Object.create(FakeMarkdownEditor.prototype)),
+    }) } };
+    edmod.resetForTests();
+    try {
+        await view.startEdit('G-aaaaa');
+        assert.equal(view.editing.editor.kind, 'obsidian');
+        assert.equal(made.doc, 'Start', 'the card body is loaded');
+        assert.equal(made.owner.file.basename, 'G-aaaaa',
+                     'suggestions resolve against the card');
+        assert.ok(view.cardEls.get('G-aaaaa').hasClass('has-obsidian-editor'));
+        made.editor.cm.contentDOM.dispatchEvent(
+            new h.window.Event('focusin'));
+        assert.equal(app.workspace.activeEditor, made.owner);
+        made.doc = 'Typed in Obsidian\'s editor';
+        made.onUpdate({}, true);
+        await tick(60);
+        assert.equal(read(cardPath('G-aaaaa')),
+                     'Typed in Obsidian\'s editor', 'autosaved');
+        const esc = scopes[0].keys.find((k) => k.key === 'Escape');
+        esc.fn();
+        await tick(20);
+        assert.equal(view.editing, null, 'Escape left the card');
+        assert.ok(made.unloaded, 'the editor was torn down');
+        assert.equal(app.workspace.setActiveLeaf, original,
+                     'the focus guard was removed');
+    } finally {
+        edmod.resetForTests();
+        delete app.embedRegistry;
+    }
+});
