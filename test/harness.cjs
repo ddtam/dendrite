@@ -1,0 +1,213 @@
+'use strict';
+// A fake Obsidian for the view tests: an in-memory vault, a metadata cache
+// that reads frontmatter, and Obsidian's HTMLElement helpers on jsdom.
+// Only what Dendrite calls is implemented, so a new API call fails loudly
+// here rather than passing untested.
+const { JSDOM } = require('jsdom');
+const Module = require('module');
+
+const dom = new JSDOM('<!doctype html><body></body>');
+const w = dom.window;
+global.window = w;
+global.document = w.document;
+global.HTMLElement = w.HTMLElement;
+
+const P = w.HTMLElement.prototype;
+function make(tag, o = {}, parent) {
+    const el = w.document.createElement(tag);
+    if (typeof o === 'string') o = { cls: o };
+    if (o.cls) el.className = o.cls;
+    if (o.text !== undefined) el.textContent = o.text;
+    if (parent) parent.appendChild(el);
+    return el;
+}
+P.createDiv = function (o) { return make('div', o, this); };
+P.createSpan = function (o) { return make('span', o, this); };
+P.createEl = function (t, o) { return make(t, o, this); };
+P.empty = function () { while (this.firstChild) this.firstChild.remove(); };
+P.addClass = function (c) { this.classList.add(c); };
+P.removeClass = function (c) { this.classList.remove(c); };
+P.hasClass = function (c) { return this.classList.contains(c); };
+P.toggleClass = function (c, on) { this.classList.toggle(c, !!on); };
+P.setText = function (t) { this.textContent = t; };
+P.setAttr = function (k, v) { this.setAttribute(k, v); };
+P.getAttr = function (k) { return this.getAttribute(k); };
+P.scrollTo = function () {};
+global.createDiv = (o) => make('div', o);
+global.createEl = (t, o) => make(t, o);
+
+global.IntersectionObserver = class {
+    constructor(cb) { this.cb = cb; }
+    observe(el) {
+        queueMicrotask(() => this.cb([{ isIntersecting: true, target: el }]));
+    }
+    unobserve() {}
+    disconnect() {}
+};
+
+class TAbstractFile {}
+class TFile extends TAbstractFile {
+    constructor(path) {
+        super();
+        this.setPath(path);
+        this.extension = 'md';
+        this.stat = { mtime: 1 };
+    }
+    setPath(path) {
+        this.path = path;
+        this.basename = path.split('/').pop().replace(/\.md$/, '');
+        const dir = path.split('/').slice(0, -1).join('/');
+        this.parent = { path: dir || '/' };
+    }
+}
+class TFolder extends TAbstractFile {
+    constructor(path, vault) {
+        super();
+        this.path = path;
+        this.vault = vault;
+    }
+    get children() {
+        return [...this.vault.files.values()].filter(
+            (f) => f.path.startsWith(this.path + '/') &&
+                !f.path.slice(this.path.length + 1).includes('/'));
+    }
+}
+
+function emitter() {
+    const h = {};
+    return {
+        on(ev, fn) { (h[ev] = h[ev] || []).push(fn); return { ev, fn }; },
+        offref(ref) {
+            h[ref.ev] = (h[ref.ev] || []).filter((f) => f !== ref.fn);
+        },
+        trigger(ev, ...a) { for (const fn of h[ev] || []) fn(...a); },
+    };
+}
+
+function makeApp() {
+    const files = new Map();
+    const text = new Map();
+    const folders = new Set();
+    const ev = emitter();
+    const meta = emitter();
+    let clock = 1;
+    const touch = (f) => { f.stat = { mtime: ++clock }; };
+    const vault = {
+        files, text, folders,
+        on: ev.on, trigger: ev.trigger,
+        getAbstractFileByPath(p) {
+            if (files.has(p)) return files.get(p);
+            if (folders.has(p)) return new TFolder(p, vault);
+            return null;
+        },
+        async createFolder(p) { folders.add(p); },
+        async create(p, data) {
+            if (files.has(p)) throw new Error('exists: ' + p);
+            const f = new TFile(p);
+            files.set(p, f);
+            text.set(p, data);
+            touch(f);
+            return f;
+        },
+        async read(f) { return text.get(f.path); },
+        async cachedRead(f) { return text.get(f.path); },
+        async modify(f, data) {
+            text.set(f.path, data);
+            touch(f);
+            ev.trigger('modify', f);
+        },
+        async process(f, fn) {
+            const out = fn(text.get(f.path));
+            await vault.modify(f, out);
+            return out;
+        },
+        getMarkdownFiles() { return [...files.values()]; },
+    };
+    const metadataCache = {
+        on: meta.on, offref: meta.offref,
+        getFileCache(f) {
+            const t = text.get(f.path) || '';
+            const m = /^---\n([\s\S]*?)\n---/.exec(t);
+            if (!m) return {};
+            const fm = {};
+            const lines = m[1].split('\n');
+            for (let i = 0; i < lines.length; i++) {
+                const kv = /^(\w+):\s*(.*)$/.exec(lines[i]);
+                if (!kv) continue;
+                if (kv[2]) fm[kv[1]] = kv[2];
+                else {
+                    fm[kv[1]] = [];
+                    while (/^\s+-\s/.test(lines[i + 1] || '')) {
+                        fm[kv[1]].push(lines[++i].replace(/^\s+-\s/, ''));
+                    }
+                }
+            }
+            return { frontmatter: fm };
+        },
+        getFirstLinkpathDest(link) {
+            for (const f of files.values()) {
+                if (f.basename === link || f.path === link + '.md') return f;
+            }
+            return null;
+        },
+    };
+    const opened = [];
+    const app = {
+        vault, metadataCache, scope: {},
+        fileManager: {
+            async trashFile(f) {
+                files.delete(f.path);
+                text.delete(f.path);
+            },
+        },
+        workspace: {
+            getLeaf() { return { openFile: async (f) => opened.push(f) }; },
+            getActiveFile() { return null; },
+            on() { return {}; },
+            getLeavesOfType() { return []; },
+            openLinkText() {},
+        },
+        opened,
+    };
+    return app;
+}
+
+const notices = [];
+const obsidian = {
+    TFile, TFolder,
+    ItemView: class {
+        constructor(leaf) {
+            this.leaf = leaf;
+            this.app = leaf.app;
+            this.contentEl = make('div');
+        }
+        registerEvent() {}
+        registerDomEvent(el, ev, fn) { el.addEventListener(ev, fn); }
+        setState() { return Promise.resolve(); }
+    },
+    Plugin: class {},
+    PluginSettingTab: class {},
+    Setting: class {},
+    Modal: class {},
+    Menu: class { addItem() { return this; } addSeparator() {} },
+    Component: class { load() {} unload() {} },
+    MarkdownRenderer: {
+        async render(app, md, el) { el.textContent = md; },
+    },
+    Notice: class { constructor(m) { notices.push(m); } },
+    Scope: class {
+        constructor() { this.keys = []; }
+        register(mods, key, fn) { this.keys.push({ mods, key, fn }); }
+    },
+    Keymap: { isModEvent: () => false },
+    setIcon() {},
+    normalizePath: (s) => s.replace(/\/+/g, '/').replace(/^\/|\/$/g, ''),
+};
+
+const orig = Module._load;
+Module._load = function (req, ...a) {
+    if (req === 'obsidian') return obsidian;
+    return orig.call(this, req, ...a);
+};
+
+module.exports = { makeApp, notices, TFile, window: w };

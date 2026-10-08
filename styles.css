@@ -1,0 +1,178 @@
+/* Dendrite. Colours come from the theme's variables, so light and dark
+   themes both work without a palette of our own. */
+
+.dendrite {
+    display: flex;
+    flex-direction: column;
+    padding: 0 !important;
+    outline: none;
+    --dendrite-gap: 12px;
+}
+
+.dendrite-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--background-modifier-border);
+    flex: 0 0 auto;
+}
+
+.dendrite-title {
+    font-weight: var(--font-semibold);
+    margin-right: auto;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.dendrite-warn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: var(--font-ui-small);
+    color: var(--text-warning);
+}
+
+.dendrite-board {
+    flex: 1 1 auto;
+    display: flex;
+    overflow-x: auto;
+    overflow-y: hidden;
+    background: var(--background-secondary);
+}
+
+.dendrite-col {
+    flex: 0 0 calc(var(--dendrite-card-width, 380px) + 2 * var(--dendrite-gap));
+    overflow-y: auto;
+    padding: 0 var(--dendrite-gap);
+    scrollbar-width: thin;
+    contain: layout style;
+}
+
+.dendrite-col + .dendrite-col {
+    border-left: 1px solid var(--background-modifier-border);
+}
+
+.dendrite-spacer {
+    height: 45vh;
+}
+
+.dendrite-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 20px;
+    padding: 4px;
+    border-radius: var(--radius-m);
+}
+
+.dendrite-card {
+    position: relative;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: var(--radius-m);
+    padding: 10px 14px;
+    cursor: pointer;
+    transition: opacity 120ms ease, box-shadow 120ms ease;
+    /* Off-screen cards skip layout and paint until scrolled near. */
+    content-visibility: auto;
+    contain-intrinsic-size: auto 80px;
+}
+
+.dendrite-board.has-active .dendrite-card {
+    opacity: 0.45;
+}
+
+.dendrite-board.has-active .dendrite-card.is-lineage {
+    opacity: 1;
+}
+
+.dendrite-card.is-active {
+    opacity: 1 !important;
+    border-color: var(--interactive-accent);
+    box-shadow: 0 0 0 1px var(--interactive-accent),
+                0 4px 14px rgba(0, 0, 0, 0.12);
+}
+
+.dendrite-card.has-children {
+    border-right: 3px solid var(--background-modifier-border-hover);
+}
+
+.dendrite-card.is-missing {
+    border-style: dashed;
+    border-color: var(--text-error);
+}
+
+.dendrite-card.is-editing {
+    cursor: text;
+    content-visibility: visible;
+}
+
+.dendrite-card-body {
+    font-size: var(--font-text-size);
+    line-height: var(--line-height-normal);
+}
+
+.dendrite-md > :first-child {
+    margin-top: 0;
+}
+
+.dendrite-md > :last-child {
+    margin-bottom: 0;
+}
+
+.dendrite-md h1, .dendrite-md h2, .dendrite-md h3,
+.dendrite-md h4, .dendrite-md h5, .dendrite-md h6 {
+    margin: 0 0 0.3em;
+}
+
+.dendrite-placeholder {
+    color: var(--text-faint);
+    font-style: italic;
+}
+
+.dendrite-editor {
+    width: 100%;
+    min-height: 4em;
+    resize: none;
+    border: none;
+    outline: none;
+    background: transparent;
+    padding: 0;
+    font-family: var(--font-text);
+    font-size: var(--font-text-size);
+    line-height: var(--line-height-normal);
+    color: var(--text-normal);
+    overflow: hidden;
+    box-shadow: none !important;
+}
+
+.dendrite-toolbar {
+    position: absolute;
+    right: 6px;
+    bottom: -14px;
+    display: flex;
+    gap: 2px;
+    padding: 2px;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: var(--radius-s);
+    box-shadow: var(--shadow-s);
+    z-index: 2;
+}
+
+.dendrite-toolbar button {
+    padding: 2px 4px;
+    height: auto;
+}
+
+.dendrite-empty {
+    margin: auto;
+    padding: 2em;
+    color: var(--text-muted);
+}
+
+.is-mobile .dendrite {
+    --dendrite-gap: 8px;
+}
