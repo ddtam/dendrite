@@ -223,6 +223,35 @@ function outdent(node) {
     return true;
 }
 
+/**
+ * Merge a card into the one above it: the card's children follow its
+ * text to the end of that card's children. Returns the card merged into,
+ * or null when there is no card above.
+ */
+function mergeIntoAbove(node) {
+    const i = indexOf(node);
+    if (i === 0) return null;
+    const target = node.parent.children[i - 1];
+    for (const c of node.children.slice()) appendChild(target, c);
+    node.children = [];
+    remove(node);
+    return target;
+}
+
+/**
+ * Merge a card into its parent: its children take its place among the
+ * parent's children. Returns the parent, or null for a top-level card.
+ */
+function mergeIntoParent(node) {
+    const parent = node.parent;
+    if (!parent.id) return null;
+    const i = indexOf(node);
+    for (const c of node.children) c.parent = parent;
+    parent.children.splice(i, 1, ...node.children);
+    node.children = [];
+    return parent;
+}
+
 function remove(node) {
     node.parent.children.splice(indexOf(node), 1);
     return true;
@@ -317,6 +346,51 @@ function sectionNumbers(roots, hasHeading) {
     };
     walk(roots, '');
     return out;
+}
+
+// ---- splitting and merging card text -------------------------------------
+
+/**
+ * Cut a card's text for a move to a new card. With a selection, the
+ * selection moves; with a bare cursor, everything after it moves. The
+ * text left behind is closed up so the cut leaves no run of blank lines.
+ * Returns { keep, moved, at }, `at` being where the moved text was in
+ * `keep`, or null when there is nothing to move.
+ */
+function splitText(body, start, end) {
+    const a = Math.min(start, end);
+    const b = start === end ? body.length : Math.max(start, end);
+    const moved = body.slice(a, b).trim();
+    if (!moved) return null;
+    const before = body.slice(0, a);
+    const after = body.slice(b);
+    let keep;
+    let at;
+    if (!after.trim()) {
+        keep = before.replace(/\s+$/, '');
+        at = keep.length;
+    } else if (!before.trim()) {
+        keep = after.replace(/^\s+/, '');
+        at = 0;
+    } else if (/\n\s*$/.test(before) || /^\s*\n/.test(after)) {
+        // The cut fell between lines: close up to one blank line.
+        keep = before.replace(/\s+$/, '') + '\n\n' +
+            after.replace(/^\s+/, '');
+        at = before.replace(/\s+$/, '').length;
+    } else {
+        // The cut fell inside a line: join the two halves with a space.
+        keep = before.replace(/[ \t]+$/, '') + ' ' +
+            after.replace(/^[ \t]+/, '');
+        at = before.replace(/[ \t]+$/, '').length;
+    }
+    return { keep, moved, at };
+}
+
+/** One card's text after another's, separated by a blank line. */
+function mergeText(first, second) {
+    const a = (first || '').replace(/\s+$/, '');
+    const b = (second || '').replace(/^\s+/, '');
+    return a && b ? a + '\n\n' + b : a || b;
 }
 
 // ---- column alignment ----------------------------------------------------
@@ -524,6 +598,8 @@ function measure(count, unit, wordsPerPage) {
 module.exports = {
     parseLimit, formatLimit, countText, measure, sectionNumbers,
     alignColumns, parseAmount, convert, quotas, fmtNum,
+    splitText, mergeText,
+    mergeIntoAbove, mergeIntoParent,
     INDENT, splitFrontmatter, parseIndex, serialiseTree, writeIndexText,
     deriveLabel, stripComments, validPrefix, newId, makeNode, makeRoot,
     insertSibling, appendChild, moveWithin, indent, outdent, remove,

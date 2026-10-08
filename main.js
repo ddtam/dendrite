@@ -167,6 +167,24 @@ var require_core = __commonJS({
       node.parent = gp;
       return true;
     }
+    function mergeIntoAbove(node) {
+      const i = indexOf(node);
+      if (i === 0) return null;
+      const target = node.parent.children[i - 1];
+      for (const c of node.children.slice()) appendChild(target, c);
+      node.children = [];
+      remove(node);
+      return target;
+    }
+    function mergeIntoParent(node) {
+      const parent = node.parent;
+      if (!parent.id) return null;
+      const i = indexOf(node);
+      for (const c of node.children) c.parent = parent;
+      parent.children.splice(i, 1, ...node.children);
+      node.children = [];
+      return parent;
+    }
     function remove(node) {
       node.parent.children.splice(indexOf(node), 1);
       return true;
@@ -238,6 +256,35 @@ var require_core = __commonJS({
       };
       walk(roots, "");
       return out;
+    }
+    function splitText(body, start, end) {
+      const a = Math.min(start, end);
+      const b = start === end ? body.length : Math.max(start, end);
+      const moved = body.slice(a, b).trim();
+      if (!moved) return null;
+      const before = body.slice(0, a);
+      const after = body.slice(b);
+      let keep;
+      let at;
+      if (!after.trim()) {
+        keep = before.replace(/\s+$/, "");
+        at = keep.length;
+      } else if (!before.trim()) {
+        keep = after.replace(/^\s+/, "");
+        at = 0;
+      } else if (/\n\s*$/.test(before) || /^\s*\n/.test(after)) {
+        keep = before.replace(/\s+$/, "") + "\n\n" + after.replace(/^\s+/, "");
+        at = before.replace(/\s+$/, "").length;
+      } else {
+        keep = before.replace(/[ \t]+$/, "") + " " + after.replace(/^[ \t]+/, "");
+        at = before.replace(/[ \t]+$/, "").length;
+      }
+      return { keep, moved, at };
+    }
+    function mergeText(first, second) {
+      const a = (first || "").replace(/\s+$/, "");
+      const b = (second || "").replace(/^\s+/, "");
+      return a && b ? a + "\n\n" + b : a || b;
     }
     function alignColumns(cols, active, pos, heights) {
       const targets = cols.map(() => null);
@@ -382,6 +429,10 @@ var require_core = __commonJS({
       convert,
       quotas,
       fmtNum,
+      splitText,
+      mergeText,
+      mergeIntoAbove,
+      mergeIntoParent,
       INDENT,
       splitFrontmatter,
       parseIndex,
@@ -621,6 +672,22 @@ var require_editor = __commonJS({
             });
           }
         },
+        selection() {
+          const editor = ed.editor;
+          return [
+            editor.posToOffset(editor.getCursor("from")),
+            editor.posToOffset(editor.getCursor("to"))
+          ];
+        },
+        replace(text, at) {
+          ed.editor.setValue(text);
+          this.focusAt(at);
+        },
+        focusAt(at) {
+          const editor = ed.editor;
+          editor.focus();
+          editor.setCursor(editor.offsetToPos(at));
+        },
         destroy() {
           parent.removeChild(ed);
         }
@@ -649,6 +716,18 @@ var require_editor = __commonJS({
           fit();
           ta.focus();
           const at = atStart ? 0 : ta.value.length;
+          ta.setSelectionRange(at, at);
+        },
+        selection() {
+          return [ta.selectionStart, ta.selectionEnd];
+        },
+        replace(text, at) {
+          ta.value = text;
+          fit();
+          this.focusAt(at);
+        },
+        focusAt(at) {
+          ta.focus();
           ta.setSelectionRange(at, at);
         },
         destroy() {
@@ -1011,6 +1090,11 @@ var DendriteView = class extends ItemView {
     const f = this.cardFile(n.id);
     if (this.editing && this.editing.id === n.id) {
       body.appendChild(this.editing.editor.el);
+      card.addClass("is-editing");
+      card.toggleClass(
+        "has-obsidian-editor",
+        this.editing.editor.kind === "obsidian"
+      );
     } else if (cached && f && cached.mtime === f.stat.mtime) {
       body.appendChild(cached.el);
     } else {
@@ -1254,6 +1338,17 @@ var DendriteView = class extends ItemView {
       const f = this.cardFile(this.active);
       if (f) this.plugin.openAsMarkdown(f);
     });
+    m.addSeparator();
+    item(
+      "Merge into the card above",
+      "merge",
+      () => this.merge("above")
+    );
+    item(
+      "Merge into the parent card",
+      "arrow-left-to-line",
+      () => this.merge("parent")
+    );
     m.addSeparator();
     item(
       "Delete card and its children (Ctrl+Backspace)",
@@ -1631,15 +1726,125 @@ var DendriteView = class extends ItemView {
       return out;
     });
   }
-  async createCardFile(id) {
+  async createCardFile(id, text = "") {
     const folder = this.cardsFolder();
     if (!this.app.vault.getAbstractFileByPath(folder)) {
       await this.app.vault.createFolder(folder);
     }
     return this.app.vault.create(
       normalizePath(`${folder}/${id}.md`),
-      ""
+      text
     );
+  }
+  /**
+   * Move the selection, or everything after the cursor, out of the card
+   * being edited into a new card below it or a new last child. The new
+   * card is written and indexed before the text leaves the original, so
+   * a failure part-way leaves the text twice, never nowhere.
+   */
+  async moveSelection(where) {
+    const ed = this.editing;
+    if (!ed) return;
+    const prefix = this.prefix();
+    if (!prefix || !core.validPrefix(prefix)) {
+      new Notice("Dendrite: set a valid dendrite_prefix first.");
+      return;
+    }
+    const original = ed.editor.value;
+    const [s, e] = ed.editor.selection();
+    const cut = core.splitText(original, s, e);
+    if (!cut) {
+      new Notice("Dendrite: nothing selected, and nothing after the cursor, to move.");
+      return;
+    }
+    const node = this.byId.get(ed.id);
+    if (!node) return;
+    const before = core.serialiseTree(this.root);
+    const id = core.newId(prefix, (x) => this.taken(x));
+    const made = await this.createCardFile(id, cut.moved);
+    const fresh = core.makeNode(
+      id,
+      core.deriveLabel(cut.moved, null),
+      null
+    );
+    if (where === "child") core.appendChild(node, fresh);
+    else core.insertSibling(node, fresh, true);
+    this.byId.set(id, fresh);
+    await this.writeIndex();
+    ed.editor.replace(cut.keep, cut.at);
+    ed.dirty = true;
+    ed.changed = true;
+    await this.save(ed);
+    this.undo.push({
+      tree: before,
+      active: ed.id,
+      files: [],
+      created: [{ path: made.path, body: cut.moved }],
+      restores: [{
+        path: ed.file.path,
+        body: original,
+        ifBody: cut.keep
+      }]
+    });
+    if (this.undo.length > UNDO_DEPTH) this.undo.shift();
+    this.render();
+    ed.editor.focusAt(cut.at);
+  }
+  /**
+   * Merge the active card into the card above it, or into its parent.
+   * The receiving card is written with both texts before the merged
+   * card's note goes to the trash.
+   */
+  async merge(kind) {
+    const node = this.active && this.byId.get(this.active);
+    if (!node) return;
+    if (this.editing) await this.endEdit();
+    const i = node.parent.children.indexOf(node);
+    const target = kind === "above" ? i > 0 ? node.parent.children[i - 1] : null : node.parent.id ? node.parent : null;
+    if (!target) {
+      new Notice(kind === "above" ? "Dendrite: no card above this one to merge into." : "Dendrite: a top-level card has no parent to merge into.");
+      return;
+    }
+    const src = this.cardFile(node.id);
+    const dst = this.cardFile(target.id);
+    if (!src || !dst) {
+      new Notice("Dendrite: a card note is missing; nothing merged.");
+      return;
+    }
+    const srcText = await this.app.vault.read(src);
+    const dstBody = core.splitFrontmatter(
+      await this.app.vault.read(dst)
+    ).body;
+    const merged = core.mergeText(
+      dstBody,
+      core.splitFrontmatter(srcText).body
+    );
+    const before = core.serialiseTree(this.root);
+    await this.app.vault.process(
+      dst,
+      (data) => core.splitFrontmatter(data).fm + merged
+    );
+    if (kind === "above") core.mergeIntoAbove(node);
+    else {
+      core.mergeIntoParent(node);
+      core.remove(node);
+    }
+    this.reindex();
+    this.active = target.id;
+    await this.writeIndex();
+    this.invalidate(node.id);
+    this.invalidate(target.id);
+    await this.app.fileManager.trashFile(src);
+    this.undo.push({
+      tree: before,
+      active: node.id,
+      files: [{ path: src.path, data: srcText }],
+      created: [],
+      restores: [{ path: dst.path, body: dstBody, ifBody: merged }]
+    });
+    if (this.undo.length > UNDO_DEPTH) this.undo.shift();
+    await this.syncLabel(target.id, merged);
+    this.render();
   }
   taken(id) {
     return this.byId.has(id) || !!this.app.metadataCache.getFirstLinkpathDest(id, "") || !!this.app.vault.getAbstractFileByPath(
@@ -1728,16 +1933,31 @@ var DendriteView = class extends ItemView {
         await this.app.vault.create(path, data);
       }
     }
-    for (const path of snap.created || []) {
+    for (const entry of snap.created || []) {
+      const path = typeof entry === "string" ? entry : entry.path;
+      const expect = typeof entry === "string" ? "" : entry.body;
       const f = this.app.vault.getAbstractFileByPath(path);
       if (!(f instanceof TFile)) continue;
       const body = core.splitFrontmatter(
         await this.app.vault.read(f)
       ).body;
-      if (!body.trim()) {
+      if (body.trim() === expect.trim()) {
         this.invalidate(f.basename);
         await this.app.fileManager.trashFile(f);
       }
+    }
+    for (const r of snap.restores || []) {
+      const f = this.app.vault.getAbstractFileByPath(r.path);
+      if (!(f instanceof TFile)) continue;
+      const body = core.splitFrontmatter(
+        await this.app.vault.read(f)
+      ).body;
+      if (body.trim() !== r.ifBody.trim()) continue;
+      await this.app.vault.process(
+        f,
+        (data) => core.splitFrontmatter(data).fm + r.body
+      );
+      this.invalidate(f.basename);
     }
     this.root = core.parseIndex(snap.tree + "\n").root;
     this.reindex();
@@ -2253,6 +2473,54 @@ module.exports = class DendritePlugin extends Plugin {
       this.app.workspace.iterateAllLeaves((l) => this.decorate(l));
       this.syncLinter();
     });
+    const viewCommand = (id, name, needsEdit, run) => this.addCommand({
+      id,
+      name,
+      checkCallback: (checking) => {
+        const v = this.app.workspace.getActiveViewOfType(
+          DendriteView
+        );
+        if (!v || (needsEdit ? !v.editing : !v.active)) return false;
+        if (!checking) run(v);
+        return true;
+      }
+    });
+    viewCommand(
+      "move-to-card-below",
+      "Move selection, or the rest of the card, to a new card below",
+      true,
+      (v) => v.moveSelection("below")
+    );
+    viewCommand(
+      "move-to-child-card",
+      "Move selection, or the rest of the card, to a new child card",
+      true,
+      (v) => v.moveSelection("child")
+    );
+    viewCommand(
+      "merge-into-above",
+      "Merge card into the card above",
+      false,
+      (v) => v.merge("above")
+    );
+    viewCommand(
+      "merge-into-parent",
+      "Merge card into its parent",
+      false,
+      (v) => v.merge("parent")
+    );
+    this.registerEvent(this.app.workspace.on(
+      "editor-menu",
+      (menu, editor, info) => {
+        const v = this.app.workspace.getLeavesOfType(VIEW).map((l) => l.view).find((x) => x.editing && info && info.file === x.editing.file);
+        if (!v) return;
+        const sel = editor.somethingSelected();
+        const what = sel ? "selection" : "rest of the card";
+        menu.addSeparator();
+        menu.addItem((i) => i.setTitle(`Move ${what} to a new card below`).setIcon("arrow-down").onClick(() => v.moveSelection("below")));
+        menu.addItem((i) => i.setTitle(`Move ${what} to a new child card`).setIcon("corner-down-right").onClick(() => v.moveSelection("child")));
+      }
+    ));
     this.registerEvent(this.app.workspace.on("file-menu", (menu, f) => {
       if (!isIndex(this.app, f)) return;
       menu.addItem((i) => i.setTitle("Open in Dendrite").setIcon("list-tree").onClick(() => this.openIndex(f)));

@@ -599,3 +599,69 @@ test('arrow keys navigate from the pane even when no scope handles them',
     await key('j');
     assert.equal(view.active, 'G-aaaaa', 'vim keys off: letters do nothing');
 });
+
+test('moving a selection to a new card below or a child, and undoing it',
+     async () => {
+    const { view, read } = await open(
+        '---\ndendrite_prefix: G\n---\n- [[G-aaaaa|A]]\n- [[G-zzzzz|Z]]\n',
+        { 'G-aaaaa': 'Keep this.\n\nMove this.\n\nAnd keep this.',
+          'G-zzzzz': 'Z' });
+    await view.startEdit('G-aaaaa');
+    view.editing.ta.setSelectionRange(12, 22);
+    await view.moveSelection('below');
+    assert.equal(read(cardPath('G-aaaaa')), 'Keep this.\n\nAnd keep this.');
+    const ids = view.root.children.map((n) => n.id);
+    assert.equal(ids.length, 3);
+    const moved = ids[1];
+    assert.equal(read(cardPath(moved)), 'Move this.');
+    assert.match(read(INDEX), new RegExp(
+        '- \\[\\[G-aaaaa\\|[^\\]]*\\]\\]\\n' +
+        `- \\[\\[${moved}\\|Move this.\\]\\]`));
+    assert.equal(view.editing.id, 'G-aaaaa', 'still editing the original');
+    // A bare cursor moves the rest of the card, into a child.
+    view.editing.ta.setSelectionRange(12, 12);
+    await view.moveSelection('child');
+    assert.equal(read(cardPath('G-aaaaa')), 'Keep this.');
+    const child = view.byId.get('G-aaaaa').children[0];
+    assert.equal(read(cardPath(child.id)), 'And keep this.');
+    await view.endEdit();
+    await view.doUndo();
+    assert.equal(read(cardPath('G-aaaaa')), 'Keep this.\n\nAnd keep this.');
+    assert.equal(read(cardPath(child.id)), undefined, 'new card removed');
+    // Text written into a moved card since is never discarded by undo.
+    await view.startEdit(moved);
+    type(view, 'Move this, revised.');
+    await view.endEdit();
+    await view.doUndo();
+    assert.equal(read(cardPath('G-aaaaa')),
+                 'Keep this.\n\nMove this.\n\nAnd keep this.');
+    assert.equal(read(cardPath(moved)), 'Move this, revised.',
+                 'the edited new card is kept');
+});
+
+test('merging into the card above or the parent, and undoing it',
+     async () => {
+    const index = '---\ndendrite_prefix: G\n---\n' +
+        '- [[G-aaaaa|A]]\n- [[G-bbbbb|B]]\n    - [[G-ccccc|C]]\n';
+    const { view, read } = await open(index, {
+        'G-aaaaa': 'Para A.', 'G-bbbbb': 'Para B.', 'G-ccccc': 'Para C.' });
+    view.active = 'G-bbbbb';
+    await view.merge('above');
+    assert.equal(read(cardPath('G-aaaaa')), 'Para A.\n\nPara B.');
+    assert.equal(read(cardPath('G-bbbbb')), undefined, 'merged note trashed');
+    assert.equal(read(INDEX), '---\ndendrite_prefix: G\n---\n' +
+                 '- [[G-aaaaa|Para A.]]\n    - [[G-ccccc|C]]\n',
+                 'B\'s child follows its text');
+    await view.doUndo();
+    assert.equal(read(cardPath('G-aaaaa')), 'Para A.');
+    assert.equal(read(cardPath('G-bbbbb')), 'Para B.');
+    assert.equal(read(INDEX), index);
+    view.active = 'G-ccccc';
+    await view.merge('parent');
+    assert.equal(read(cardPath('G-bbbbb')), 'Para B.\n\nPara C.');
+    assert.equal(view.byId.get('G-bbbbb').children.length, 0);
+    view.active = 'G-aaaaa';
+    await view.merge('above');
+    assert.equal(read(cardPath('G-aaaaa')), 'Para A.',
+                 'nothing above the first card: unchanged');
+});

@@ -325,3 +325,24 @@ test('quotas: fractions, conversion and the waterfall of allocations', () => {
     assert.equal(r.get(null).allocated, 0.5);
     assert.equal(r.has('M'), false, 'a card without a quota has no report');
 });
+
+test('splitting moves a selection or the rest, and closes up the cut', () => {
+    const body = 'First para.\n\nSecond para.\n\nThird para.';
+    let r = c.splitText(body, 13, 25);
+    assert.equal(r.moved, 'Second para.');
+    assert.equal(r.keep, 'First para.\n\nThird para.');
+    assert.equal(r.keep.slice(0, r.at), 'First para.');
+    r = c.splitText(body, 13, 13);
+    assert.equal(r.moved, 'Second para.\n\nThird para.', 'cursor: the rest');
+    assert.equal(r.keep, 'First para.');
+    r = c.splitText('One two three four.', 8, 14);
+    assert.equal(r.moved, 'three');
+    assert.equal(r.keep, 'One two four.', 'mid-line: one space');
+    r = c.splitText(body, 0, 13);
+    assert.equal(r.keep, 'Second para.\n\nThird para.');
+    assert.equal(r.at, 0);
+    assert.equal(c.splitText(body, body.length, body.length), null,
+                 'nothing after the cursor');
+    assert.equal(c.mergeText('A.\n\n', '\n\nB.'), 'A.\n\nB.');
+    assert.equal(c.mergeText('', 'B.'), 'B.');
+});

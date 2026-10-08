@@ -339,6 +339,9 @@ class DendriteView extends ItemView {
         const f = this.cardFile(n.id);
         if (this.editing && this.editing.id === n.id) {
             body.appendChild(this.editing.editor.el);
+            card.addClass('is-editing');
+            card.toggleClass('has-obsidian-editor',
+                             this.editing.editor.kind === 'obsidian');
         } else if (cached && f && cached.mtime === f.stat.mtime) {
             body.appendChild(cached.el);
         } else {
@@ -567,6 +570,11 @@ class DendriteView extends ItemView {
             const f = this.cardFile(this.active);
             if (f) this.plugin.openAsMarkdown(f);
         });
+        m.addSeparator();
+        item('Merge into the card above', 'merge',
+             () => this.merge('above'));
+        item('Merge into the parent card', 'arrow-left-to-line',
+             () => this.merge('parent'));
         m.addSeparator();
         item('Delete card and its children (Ctrl+Backspace)', 'trash-2',
              () => this.deleteActive());
@@ -958,13 +966,117 @@ class DendriteView extends ItemView {
         });
     }
 
-    async createCardFile(id) {
+    async createCardFile(id, text = '') {
         const folder = this.cardsFolder();
         if (!this.app.vault.getAbstractFileByPath(folder)) {
             await this.app.vault.createFolder(folder);
         }
         return this.app.vault.create(normalizePath(`${folder}/${id}.md`),
-                                     '');
+                                     text);
+    }
+
+    /**
+     * Move the selection, or everything after the cursor, out of the card
+     * being edited into a new card below it or a new last child. The new
+     * card is written and indexed before the text leaves the original, so
+     * a failure part-way leaves the text twice, never nowhere.
+     */
+    async moveSelection(where) {
+        const ed = this.editing;
+        if (!ed) return;
+        const prefix = this.prefix();
+        if (!prefix || !core.validPrefix(prefix)) {
+            new Notice('Dendrite: set a valid dendrite_prefix first.');
+            return;
+        }
+        const original = ed.editor.value;
+        const [s, e] = ed.editor.selection();
+        const cut = core.splitText(original, s, e);
+        if (!cut) {
+            new Notice('Dendrite: nothing selected, and nothing after the ' +
+                       'cursor, to move.');
+            return;
+        }
+        const node = this.byId.get(ed.id);
+        if (!node) return;
+        const before = core.serialiseTree(this.root);
+        const id = core.newId(prefix, (x) => this.taken(x));
+        const made = await this.createCardFile(id, cut.moved);
+        const fresh = core.makeNode(id, core.deriveLabel(cut.moved, null),
+                                    null);
+        if (where === 'child') core.appendChild(node, fresh);
+        else core.insertSibling(node, fresh, true);
+        this.byId.set(id, fresh);
+        await this.writeIndex();
+        ed.editor.replace(cut.keep, cut.at);
+        ed.dirty = true;
+        ed.changed = true;
+        await this.save(ed);
+        this.undo.push({
+            tree: before, active: ed.id, files: [],
+            created: [{ path: made.path, body: cut.moved }],
+            restores: [{ path: ed.file.path, body: original,
+                         ifBody: cut.keep }],
+        });
+        if (this.undo.length > UNDO_DEPTH) this.undo.shift();
+        this.render();
+        // Rebuilding the board moved the editor; put the cursor back at
+        // the cut, ready to move the next piece.
+        ed.editor.focusAt(cut.at);
+    }
+
+    /**
+     * Merge the active card into the card above it, or into its parent.
+     * The receiving card is written with both texts before the merged
+     * card's note goes to the trash.
+     */
+    async merge(kind) {
+        const node = this.active && this.byId.get(this.active);
+        if (!node) return;
+        if (this.editing) await this.endEdit();
+        const i = node.parent.children.indexOf(node);
+        const target = kind === 'above' ?
+            (i > 0 ? node.parent.children[i - 1] : null) :
+            (node.parent.id ? node.parent : null);
+        if (!target) {
+            new Notice(kind === 'above' ?
+                'Dendrite: no card above this one to merge into.' :
+                'Dendrite: a top-level card has no parent to merge into.');
+            return;
+        }
+        const src = this.cardFile(node.id);
+        const dst = this.cardFile(target.id);
+        if (!src || !dst) {
+            new Notice('Dendrite: a card note is missing; nothing merged.');
+            return;
+        }
+        const srcText = await this.app.vault.read(src);
+        const dstBody = core.splitFrontmatter(
+            await this.app.vault.read(dst)).body;
+        const merged = core.mergeText(dstBody,
+                                      core.splitFrontmatter(srcText).body);
+        const before = core.serialiseTree(this.root);
+        await this.app.vault.process(dst,
+            (data) => core.splitFrontmatter(data).fm + merged);
+        if (kind === 'above') core.mergeIntoAbove(node);
+        else {
+            core.mergeIntoParent(node);
+            core.remove(node);
+        }
+        this.reindex();
+        this.active = target.id;
+        await this.writeIndex();
+        this.invalidate(node.id);
+        this.invalidate(target.id);
+        await this.app.fileManager.trashFile(src);
+        this.undo.push({
+            tree: before, active: node.id,
+            files: [{ path: src.path, data: srcText }], created: [],
+            restores: [{ path: dst.path, body: dstBody, ifBody: merged }],
+        });
+        if (this.undo.length > UNDO_DEPTH) this.undo.shift();
+        await this.syncLabel(target.id, merged);
+        this.render();
     }
 
     taken(id) {
@@ -1059,17 +1171,32 @@ class DendriteView extends ItemView {
                 await this.app.vault.create(path, data);
             }
         }
-        // A card created by the undone insert goes with it, unless text
-        // was written into it, which undo never discards.
-        for (const path of snap.created || []) {
+        // A card note the undone change created goes with it, but only
+        // while it holds what the change put there: text written into it
+        // since is never discarded.
+        for (const entry of snap.created || []) {
+            const path = typeof entry === 'string' ? entry : entry.path;
+            const expect = typeof entry === 'string' ? '' : entry.body;
             const f = this.app.vault.getAbstractFileByPath(path);
             if (!(f instanceof TFile)) continue;
             const body = core.splitFrontmatter(
                 await this.app.vault.read(f)).body;
-            if (!body.trim()) {
+            if (body.trim() === expect.trim()) {
                 this.invalidate(f.basename);
                 await this.app.fileManager.trashFile(f);
             }
+        }
+        // A card note the change rewrote gets its text back, if it still
+        // holds what the change left in it.
+        for (const r of snap.restores || []) {
+            const f = this.app.vault.getAbstractFileByPath(r.path);
+            if (!(f instanceof TFile)) continue;
+            const body = core.splitFrontmatter(
+                await this.app.vault.read(f)).body;
+            if (body.trim() !== r.ifBody.trim()) continue;
+            await this.app.vault.process(f,
+                (data) => core.splitFrontmatter(data).fm + r.body);
+            this.invalidate(f.basename);
         }
         this.root = core.parseIndex(snap.tree + '\n').root;
         this.reindex();
@@ -1678,6 +1805,46 @@ module.exports = class DendritePlugin extends Plugin {
             this.app.workspace.iterateAllLeaves((l) => this.decorate(l));
             this.syncLinter();
         });
+        const viewCommand = (id, name, needsEdit, run) => this.addCommand({
+            id, name,
+            checkCallback: (checking) => {
+                const v = this.app.workspace.getActiveViewOfType(
+                    DendriteView);
+                if (!v || (needsEdit ? !v.editing : !v.active)) return false;
+                if (!checking) run(v);
+                return true;
+            },
+        });
+        viewCommand('move-to-card-below',
+            'Move selection, or the rest of the card, to a new card below',
+            true, (v) => v.moveSelection('below'));
+        viewCommand('move-to-child-card',
+            'Move selection, or the rest of the card, to a new child card',
+            true, (v) => v.moveSelection('child'));
+        viewCommand('merge-into-above', 'Merge card into the card above',
+            false, (v) => v.merge('above'));
+        viewCommand('merge-into-parent', 'Merge card into its parent',
+            false, (v) => v.merge('parent'));
+        // The same moves in the editor's own right-click menu, beside cut
+        // and copy, when the editor is a card's.
+        this.registerEvent(this.app.workspace.on('editor-menu',
+            (menu, editor, info) => {
+                const v = this.app.workspace.getLeavesOfType(VIEW)
+                    .map((l) => l.view)
+                    .find((x) => x.editing && info &&
+                          info.file === x.editing.file);
+                if (!v) return;
+                const sel = editor.somethingSelected();
+                const what = sel ? 'selection' : 'rest of the card';
+                menu.addSeparator();
+                menu.addItem((i) => i.setTitle(`Move ${what} to a new card ` +
+                                               'below').setIcon('arrow-down')
+                    .onClick(() => v.moveSelection('below')));
+                menu.addItem((i) => i.setTitle(`Move ${what} to a new ` +
+                                               'child card')
+                    .setIcon('corner-down-right')
+                    .onClick(() => v.moveSelection('child')));
+            }));
         this.registerEvent(this.app.workspace.on('file-menu', (menu, f) => {
             if (!isIndex(this.app, f)) return;
             menu.addItem((i) => i.setTitle('Open in Dendrite')
