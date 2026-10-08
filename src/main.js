@@ -843,9 +843,15 @@ class DendriteView extends ItemView {
      * the pane's own keydown rather than registered in Obsidian's scope.
      */
     onNavKey(e) {
-        if (this.editing || !this.plugin.settings.vimKeys) return;
+        if (this.editing || e.defaultPrevented) return;
+        if (e.target.closest('input, textarea, select, .dendrite-cm')) return;
+        // Arrows and Enter are bound in the view's scope too, but that
+        // scope is not always the active one after Obsidian's editor
+        // closes, so they are also read here; defaultPrevented means the
+        // scope already handled the key.
+        if (this.arrowKey(e)) return;
         if (e.ctrlKey || e.metaKey || e.altKey) return;
-        if (e.target.closest('input, textarea, select')) return;
+        if (!this.plugin.settings.vimKeys) return;
         const prev = this.pendingKey;
         this.pendingKey = null;
         const k = e.key;
@@ -880,6 +886,34 @@ class DendriteView extends ItemView {
         if (!act) return;
         e.preventDefault();
         act();
+    }
+
+    /** Arrows, Alt and Ctrl arrows, and Enter; true if handled. */
+    arrowKey(e) {
+        const mod = e.ctrlKey || e.metaKey;
+        if (e.key === 'Enter' && !mod && !e.altKey && !e.shiftKey) {
+            e.preventDefault();
+            if (this.active) this.startEdit(this.active);
+            return true;
+        }
+        const dir = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left',
+                      ArrowRight: 'right' }[e.key];
+        if (!dir || e.shiftKey) return false;
+        let act = null;
+        if (e.altKey && !mod) {
+            const op = { up: 'up', down: 'down', left: 'outdent',
+                         right: 'indent' }[dir];
+            act = () => this.structural(op);
+        } else if (mod && !e.altKey) {
+            const where = { up: 'above', down: 'below', right: 'child' }[dir];
+            if (where) act = () => this.insert(where);
+        } else if (!mod && !e.altKey) {
+            act = () => this.navigate(dir);
+        }
+        if (!act) return false;
+        e.preventDefault();
+        act();
+        return true;
     }
 
     columnEnd(top) {

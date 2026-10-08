@@ -555,3 +555,35 @@ test('Obsidian\'s editor: typing saves, Escape leaves, and it is torn down',
         delete app.embedRegistry;
     }
 });
+
+test('arrow keys navigate from the pane even when no scope handles them',
+     async () => {
+    const { view } = await open(
+        '---\ndendrite_prefix: G\n---\n' +
+        '- [[G-aaaaa|A]]\n    - [[G-bbbbb|B]]\n- [[G-ccccc|C]]\n',
+        { 'G-aaaaa': 'A', 'G-bbbbb': 'B', 'G-ccccc': 'C' });
+    view.plugin.settings.vimKeys = false;
+    const key = async (k, extra = {}) => {
+        view.contentEl.dispatchEvent(new h.window.KeyboardEvent('keydown',
+            Object.assign({ key: k, bubbles: true, cancelable: true },
+                          extra)));
+        await tick(5);
+    };
+    await key('ArrowDown');
+    assert.equal(view.active, 'G-ccccc');
+    await key('ArrowUp');
+    await key('ArrowRight');
+    assert.equal(view.active, 'G-bbbbb');
+    await key('ArrowLeft');
+    assert.equal(view.active, 'G-aaaaa');
+    await key('Enter');
+    assert.equal(view.editing.id, 'G-aaaaa', 'Enter edits');
+    await key('ArrowDown');
+    assert.equal(view.active, 'G-aaaaa', 'arrows are the text\'s in edit mode');
+    await view.endEdit();
+    await key('ArrowDown', { altKey: true });
+    assert.deepEqual(view.root.children.map((n) => n.id),
+                     ['G-ccccc', 'G-aaaaa'], 'Alt+Down moves the card');
+    await key('j');
+    assert.equal(view.active, 'G-aaaaa', 'vim keys off: letters do nothing');
+});
