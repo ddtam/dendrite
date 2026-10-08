@@ -225,14 +225,16 @@ class DendriteView extends ItemView {
         }
         this.renderBar(el);
         const stage = el.createDiv({ cls: 'dendrite-stage' });
-        const board = stage.createDiv({ cls: 'dendrite-board' });
-        this.board = board;
         // The flow from each card on the active path into its children
-        // is drawn on one SVG above the board, redrawn as columns scroll.
+        // is one SVG path behind the board, whose background is clear, so
+        // it shows around the opaque cards and joins them cleanly. It is
+        // redrawn as columns scroll.
         const NS = 'http://www.w3.org/2000/svg';
         this.flowSvg = document.createElementNS(NS, 'svg');
         this.flowSvg.classList.add('dendrite-flow');
         stage.appendChild(this.flowSvg);
+        const board = stage.createDiv({ cls: 'dendrite-board' });
+        this.board = board;
         board.addEventListener('scroll', () => this.scheduleFlow(), true);
         this.renderOrphans(stage);
         const cols = core.columns(this.root);
@@ -480,7 +482,14 @@ class DendriteView extends ItemView {
         const node = this.active && this.byId.get(this.active);
         if (!node) return;
         const box = svg.getBoundingClientRect();
-        const NS = 'http://www.w3.org/2000/svg';
+        const rel = (el) => {
+            const r = el.getBoundingClientRect();
+            return { left: r.left - box.left, right: r.right - box.left,
+                     top: r.top - box.top, bottom: r.bottom - box.top,
+                     r: parseFloat(getComputedStyle(el).borderTopLeftRadius)
+                        || 0 };
+        };
+        const pairs = [];
         for (let n = node; n && n.id; n = n.parent) {
             if (!n.children.length) continue;
             const card = this.cardEls.get(n.id);
@@ -488,19 +497,13 @@ class DendriteView extends ItemView {
             const group = child && child.parentElement;
             if (!card || !group) continue;
             group.classList.add('is-flow');
-            const a = card.getBoundingClientRect();
-            const b = group.getBoundingClientRect();
-            const x1 = a.right - box.left;
-            const x2 = b.left - box.left;
-            const mx = (x1 + x2) / 2;
-            const [at, ab] = [a.top - box.top, a.bottom - box.top];
-            const [bt, bb] = [b.top - box.top, b.bottom - box.top];
-            const d = `M${x1},${at} C${mx},${at} ${mx},${bt} ${x2},${bt} ` +
-                `L${x2},${bb} C${mx},${bb} ${mx},${ab} ${x1},${ab} Z`;
-            const path = document.createElementNS(NS, 'path');
-            path.setAttribute('d', d);
-            svg.appendChild(path);
+            pairs.push({ card: rel(card), group: rel(group) });
         }
+        if (!pairs.length) return;
+        const NS = 'http://www.w3.org/2000/svg';
+        const path = document.createElementNS(NS, 'path');
+        path.setAttribute('d', core.flowPath(pairs));
+        svg.appendChild(path);
     }
 
     /**

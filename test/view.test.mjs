@@ -284,7 +284,10 @@ test('the active path flows into each child group', async () => {
         .map((g) => g.querySelector('.dendrite-card').dataset.id);
     assert.deepEqual(flows.sort(), ['G-bbbbb', 'G-ccccc'],
                      'A opens into its children, B into its own');
-    assert.equal(view.flowSvg.querySelectorAll('path').length, 2);
+    const paths = view.flowSvg.querySelectorAll('path');
+    assert.equal(paths.length, 1, 'one shape, so overlaps are not doubled');
+    assert.equal(paths[0].getAttribute('d').split(' Z')
+        .filter((s) => s.trim()).length, 4, 'two bands and two groups');
 });
 
 test('vim keys move, insert, rearrange and delete in normal mode',

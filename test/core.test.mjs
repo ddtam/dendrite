@@ -346,3 +346,18 @@ test('splitting moves a selection or the rest, and closes up the cut', () => {
     assert.equal(c.mergeText('A.\n\n', '\n\nB.'), 'A.\n\nB.');
     assert.equal(c.mergeText('', 'B.'), 'B.');
 });
+
+test('the flow is one path: a band per card and its group, joined', () => {
+    const d = c.flowPath([{
+        card: { left: 0, right: 100, top: 40, bottom: 120, r: 6 },
+        group: { left: 130, right: 230, top: 0, bottom: 300, r: 6 },
+    }]);
+    const subpaths = d.split(' Z').filter((s) => s.trim());
+    assert.equal(subpaths.length, 2, 'the band and the group');
+    assert.match(d, /^M99,46 /, 'leaves the card under its edge, ' +
+                 'below its rounded corner');
+    assert.match(d, /L136,294 /, 'enters the group inside its corner');
+    assert.match(d, /M136,0 H224 A6,6 0 0 1 230,6 /,
+                 'the group is a rounded rectangle, clockwise');
+    assert.equal(c.flowPath([]), '');
+});

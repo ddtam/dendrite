@@ -450,6 +450,46 @@ function alignColumns(cols, active, pos, heights) {
     return targets;
 }
 
+/**
+ * The flow as one SVG path, so the bands and the tinted groups they open
+ * into are filled once where they overlap, never doubled. Each pair is a
+ * card's box and the box of the group holding its children, in the SVG's
+ * coordinates, each with its corner radius `r`. The band leaves the card
+ * from the straight part of its right edge, tucked under it, and enters
+ * the group's straight left edge; the group is a rounded rectangle. All
+ * subpaths run clockwise, so the nonzero fill joins them as one shape.
+ */
+function flowPath(pairs) {
+    const f = (x) => Math.round(x * 10) / 10;
+    const parts = [];
+    for (const { card: a, group: b } of pairs) {
+        const ra = Math.min(a.r || 0, (a.bottom - a.top) / 2);
+        const rb = Math.min(b.r || 0, (b.right - b.left) / 2,
+                            (b.bottom - b.top) / 2);
+        const x1 = a.right - 1;
+        const x2 = b.left + rb;
+        const at = a.top + ra;
+        const ab = a.bottom - ra;
+        const bt = b.top + rb;
+        const bb = b.bottom - rb;
+        const mx = (a.right + b.left) / 2;
+        parts.push(`M${f(x1)},${f(at)} C${f(mx)},${f(at)} ${f(mx)},${f(bt)} ` +
+                   `${f(x2)},${f(bt)} L${f(x2)},${f(bb)} C${f(mx)},${f(bb)} ` +
+                   `${f(mx)},${f(ab)} ${f(x1)},${f(ab)} Z`);
+        // The group, a rounded rectangle, clockwise from its top left.
+        const [l, r, t, btm] = [b.left, b.right, b.top, b.bottom];
+        parts.push(`M${f(l + rb)},${f(t)} H${f(r - rb)} ` +
+                   `A${f(rb)},${f(rb)} 0 0 1 ${f(r)},${f(t + rb)} ` +
+                   `V${f(btm - rb)} ` +
+                   `A${f(rb)},${f(rb)} 0 0 1 ${f(r - rb)},${f(btm)} ` +
+                   `H${f(l + rb)} ` +
+                   `A${f(rb)},${f(rb)} 0 0 1 ${f(l)},${f(btm - rb)} ` +
+                   `V${f(t + rb)} ` +
+                   `A${f(rb)},${f(rb)} 0 0 1 ${f(l + rb)},${f(t)} Z`);
+    }
+    return parts.join(' ');
+}
+
 // ---- limits and counts ---------------------------------------------------
 
 // An amount, which may be a fraction, then a unit.
@@ -600,6 +640,7 @@ module.exports = {
     alignColumns, parseAmount, convert, quotas, fmtNum,
     splitText, mergeText,
     mergeIntoAbove, mergeIntoParent,
+    flowPath,
     INDENT, splitFrontmatter, parseIndex, serialiseTree, writeIndexText,
     deriveLabel, stripComments, validPrefix, newId, makeNode, makeRoot,
     insertSibling, appendChild, moveWithin, indent, outdent, remove,

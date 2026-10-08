@@ -327,6 +327,29 @@ var require_core = __commonJS({
       }
       return targets;
     }
+    function flowPath(pairs) {
+      const f = (x) => Math.round(x * 10) / 10;
+      const parts = [];
+      for (const { card: a, group: b } of pairs) {
+        const ra = Math.min(a.r || 0, (a.bottom - a.top) / 2);
+        const rb = Math.min(
+          b.r || 0,
+          (b.right - b.left) / 2,
+          (b.bottom - b.top) / 2
+        );
+        const x1 = a.right - 1;
+        const x2 = b.left + rb;
+        const at = a.top + ra;
+        const ab = a.bottom - ra;
+        const bt = b.top + rb;
+        const bb = b.bottom - rb;
+        const mx = (a.right + b.left) / 2;
+        parts.push(`M${f(x1)},${f(at)} C${f(mx)},${f(at)} ${f(mx)},${f(bt)} ${f(x2)},${f(bt)} L${f(x2)},${f(bb)} C${f(mx)},${f(bb)} ${f(mx)},${f(ab)} ${f(x1)},${f(ab)} Z`);
+        const [l, r, t, btm] = [b.left, b.right, b.top, b.bottom];
+        parts.push(`M${f(l + rb)},${f(t)} H${f(r - rb)} A${f(rb)},${f(rb)} 0 0 1 ${f(r)},${f(t + rb)} V${f(btm - rb)} A${f(rb)},${f(rb)} 0 0 1 ${f(r - rb)},${f(btm)} H${f(l + rb)} A${f(rb)},${f(rb)} 0 0 1 ${f(l)},${f(btm - rb)} V${f(t + rb)} A${f(rb)},${f(rb)} 0 0 1 ${f(l + rb)},${f(t)} Z`);
+      }
+      return parts.join(" ");
+    }
     var NUM = "\\d+(?:\\.\\d+)?";
     var LIMIT = new RegExp(`^\\s*(${NUM}(?:\\s*/\\s*${NUM})?)\\s*(words?|characters?|chars?|pages?)\\s*$`, "i");
     function parseAmount(text) {
@@ -433,6 +456,7 @@ var require_core = __commonJS({
       mergeText,
       mergeIntoAbove,
       mergeIntoParent,
+      flowPath,
       INDENT,
       splitFrontmatter,
       parseIndex,
@@ -962,12 +986,12 @@ var DendriteView = class extends ItemView {
     }
     this.renderBar(el);
     const stage = el.createDiv({ cls: "dendrite-stage" });
-    const board = stage.createDiv({ cls: "dendrite-board" });
-    this.board = board;
     const NS = "http://www.w3.org/2000/svg";
     this.flowSvg = document.createElementNS(NS, "svg");
     this.flowSvg.classList.add("dendrite-flow");
     stage.appendChild(this.flowSvg);
+    const board = stage.createDiv({ cls: "dendrite-board" });
+    this.board = board;
     board.addEventListener("scroll", () => this.scheduleFlow(), true);
     this.renderOrphans(stage);
     const cols = core.columns(this.root);
@@ -1228,7 +1252,17 @@ var DendriteView = class extends ItemView {
     const node = this.active && this.byId.get(this.active);
     if (!node) return;
     const box = svg.getBoundingClientRect();
-    const NS = "http://www.w3.org/2000/svg";
+    const rel = (el) => {
+      const r = el.getBoundingClientRect();
+      return {
+        left: r.left - box.left,
+        right: r.right - box.left,
+        top: r.top - box.top,
+        bottom: r.bottom - box.top,
+        r: parseFloat(getComputedStyle(el).borderTopLeftRadius) || 0
+      };
+    };
+    const pairs = [];
     for (let n = node; n && n.id; n = n.parent) {
       if (!n.children.length) continue;
       const card = this.cardEls.get(n.id);
@@ -1236,18 +1270,13 @@ var DendriteView = class extends ItemView {
       const group = child && child.parentElement;
       if (!card || !group) continue;
       group.classList.add("is-flow");
-      const a = card.getBoundingClientRect();
-      const b = group.getBoundingClientRect();
-      const x1 = a.right - box.left;
-      const x2 = b.left - box.left;
-      const mx = (x1 + x2) / 2;
-      const [at, ab] = [a.top - box.top, a.bottom - box.top];
-      const [bt, bb] = [b.top - box.top, b.bottom - box.top];
-      const d = `M${x1},${at} C${mx},${at} ${mx},${bt} ${x2},${bt} L${x2},${bb} C${mx},${bb} ${mx},${ab} ${x1},${ab} Z`;
-      const path = document.createElementNS(NS, "path");
-      path.setAttribute("d", d);
-      svg.appendChild(path);
+      pairs.push({ card: rel(card), group: rel(group) });
     }
+    if (!pairs.length) return;
+    const NS = "http://www.w3.org/2000/svg";
+    const path = document.createElementNS(NS, "path");
+    path.setAttribute("d", core.flowPath(pairs));
+    svg.appendChild(path);
   }
   /**
    * Centre the active card, horizontally and vertically, and in every

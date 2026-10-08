@@ -12,6 +12,7 @@ global.window = w;
 global.document = w.document;
 global.HTMLElement = w.HTMLElement;
 global.Event = w.Event;
+global.getComputedStyle = (el) => w.getComputedStyle(el);
 global.requestAnimationFrame = (fn) => setTimeout(fn, 0);
 
 const P = w.HTMLElement.prototype;
