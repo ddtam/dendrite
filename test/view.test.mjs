@@ -452,10 +452,15 @@ test('right-click opens the card menu at the pointer, delete included',
         '---\ndendrite_prefix: G\n---\n- [[G-aaaaa|A]]\n- [[G-bbbbb|B]]\n',
         { 'G-aaaaa': 'A', 'G-bbbbb': 'B' });
     const card = view.cardEls.get('G-bbbbb');
+    let centred = 0;
+    const orig = view.centre.bind(view);
+    view.centre = (...a) => { centred++; orig(...a); };
     card.dispatchEvent(new h.window.MouseEvent('contextmenu',
         { bubbles: true, cancelable: true }));
     await tick(10);
     assert.equal(view.active, 'G-bbbbb', 'the card is selected');
+    assert.equal(centred, 0, 'right-click does not move the board');
+    assert.ok(card.hasClass('is-active'), 'but the card is highlighted');
     const menu = h.obsidian.lastMenu;
     assert.equal(menu.shown, 'mouse');
     const del = menu.items.find((i) => /^Delete/.test(i.title));

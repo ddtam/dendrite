@@ -695,7 +695,7 @@ var DendriteView = class extends ItemView {
       const card = e.target.closest(".dendrite-card");
       if (!card || e.target.closest("textarea, .dendrite-cm")) return;
       e.preventDefault();
-      await this.select(card.dataset.id);
+      await this.select(card.dataset.id, false);
       this.cardMenu(card, e);
     });
     this.registerDomEvent(this.contentEl, "dblclick", (e) => {
@@ -1180,7 +1180,11 @@ var DendriteView = class extends ItemView {
     if (card) this.select(card.dataset.id);
     this.contentEl.focus();
   }
-  async select(id) {
+  /**
+   * Make a card the active one. `move` false highlights it without
+   * scrolling, so a menu opened on it stays beside it.
+   */
+  async select(id, move = true) {
     if (!id || id === this.active) return;
     if (this.editing) await this.endEdit();
     const node = this.byId.get(id);
@@ -1188,7 +1192,8 @@ var DendriteView = class extends ItemView {
       this.lastChild.set(node.parent.id, id);
     }
     this.active = id;
-    this.applyActive();
+    if (move) this.applyActive();
+    else this.highlight();
   }
   navigate(dir) {
     const node = this.active && this.byId.get(this.active);
