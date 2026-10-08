@@ -265,6 +265,7 @@ class DendriteView extends ItemView {
         this.applyActive(false);
         this.updateNumbers();
         this.updateRoles();
+        this.updateStatuses();
         this.updateCounts();
     }
 
@@ -293,6 +294,7 @@ class DendriteView extends ItemView {
         btn('scroll-text', 'Preview', 'Show what export would print, ' +
             'beside the board', () => this.plugin.openPreview(this.file));
         this.totalEl = bar.createDiv({ cls: 'dendrite-total' });
+        this.statusEl = bar.createDiv({ cls: 'dendrite-tally' });
     }
 
     /**
@@ -603,6 +605,28 @@ class DendriteView extends ItemView {
         const node = this.byId.get(id);
         const auto = node && node.children.length ? 'heading only' :
             'full text';
+        const info = this.statusInfo && this.statusInfo.get(id);
+        if (info && info.prints) {
+            m.addSeparator();
+            for (const [value, title, icon] of [
+                ['draft', 'Status: draft', 'pencil-line'],
+                ['done', 'Status: done (+)', 'check'],
+                ['revise', 'Status: revise (−)', 'flag'],
+            ]) {
+                m.addItem((i) => {
+                    i.setTitle(title).setIcon(icon)
+                        .onClick(() => this.setStatus(id, value));
+                    if (typeof i.setChecked === 'function') {
+                        i.setChecked(info.own === value);
+                    }
+                });
+            }
+        } else if (info && info.own === 'unsplit') {
+            m.addSeparator();
+            item('Keep the leftover text as notes', 'check',
+                 () => this.setStatus(id, null));
+        }
+        m.addSeparator();
         for (const [value, title, icon] of [
             [null, `Prints automatically (${auto})`, 'wand'],
             ['section', 'Prints its heading only', 'heading'],
@@ -912,6 +936,16 @@ class DendriteView extends ItemView {
         // scope already handled the key.
         if (this.arrowKey(e)) return;
         if (e.ctrlKey || e.metaKey || e.altKey) return;
+        const statusKey = { ']': () => this.nextFlagged(1),
+                            '[': () => this.nextFlagged(-1),
+                            '+': () => this.stepStatus(true),
+                            '=': () => this.stepStatus(true),
+                            '-': () => this.stepStatus(false) }[e.key];
+        if (statusKey) {
+            e.preventDefault();
+            statusKey();
+            return;
+        }
         if (!this.plugin.settings.vimKeys) return;
         const prev = this.pendingKey;
         this.pendingKey = null;
@@ -1053,8 +1087,17 @@ class DendriteView extends ItemView {
         const node = this.byId.get(ed.id);
         if (!node) return;
         const before = core.serialiseTree(this.root);
+        const srcText = await this.app.vault.read(ed.file);
+        // Read fresh, not from the board's last drawing: a status set a
+        // moment ago may not have been drawn yet.
+        const srcStatus = core.roleFor(node, (x) => this.roleOf(x)) ===
+            'prose' ? this.statusOf(ed.id) : null;
         const id = core.newId(prefix, (x) => this.taken(x));
         const made = await this.createCardFile(id, cut.moved);
+        // The moved text is as mature as it was where it came from.
+        if (srcStatus && srcStatus !== 'draft') {
+            await writeProps(this.app, made, { dendrite_status: srcStatus });
+        }
         const fresh = core.makeNode(id, core.deriveLabel(cut.moved, null),
                                     null);
         if (where === 'child') core.appendChild(node, fresh);
@@ -1065,11 +1108,19 @@ class DendriteView extends ItemView {
         ed.dirty = true;
         ed.changed = true;
         await this.save(ed);
+        // A card that moved part of itself into a child and stopped
+        // printing has a status only if text is left behind: unsplit,
+        // until the split is finished or the rest is kept as notes.
+        if (where === 'child' &&
+            core.roleFor(node, (x) => this.roleOf(x)) !== 'prose') {
+            await this.setStatus(ed.id,
+                core.leftover(cut.keep) ? 'unsplit' : null);
+        }
         this.undo.push({
             tree: before, active: ed.id, files: [],
             created: [{ path: made.path, body: cut.moved }],
             restores: [{ path: ed.file.path, body: original,
-                         ifBody: cut.keep }],
+                         ifBody: cut.keep, text: srcText }],
         });
         if (this.undo.length > UNDO_DEPTH) this.undo.shift();
         this.render();
@@ -1104,8 +1155,10 @@ class DendriteView extends ItemView {
             return;
         }
         const srcText = await this.app.vault.read(src);
-        const dstBody = core.splitFrontmatter(
-            await this.app.vault.read(dst)).body;
+        const dstText = await this.app.vault.read(dst);
+        const dstBody = core.splitFrontmatter(dstText).body;
+        const mergedStatus = core.lowerStatus(this.statusOf(node.id),
+                                              this.statusOf(target.id));
         const merged = core.mergeText(dstBody,
                                       core.splitFrontmatter(srcText).body);
         const before = core.serialiseTree(this.root);
@@ -1125,10 +1178,16 @@ class DendriteView extends ItemView {
         this.undo.push({
             tree: before, active: node.id,
             files: [{ path: src.path, data: srcText }], created: [],
-            restores: [{ path: dst.path, body: dstBody, ifBody: merged }],
+            restores: [{ path: dst.path, body: dstBody, ifBody: merged,
+                         text: dstText }],
         });
         if (this.undo.length > UNDO_DEPTH) this.undo.shift();
         await this.syncLabel(target.id, merged);
+        // Merged text is only as mature as the less mature of the two.
+        if (core.roleFor(target, (x) => this.roleOf(x)) === 'prose') {
+            await this.setStatus(target.id, mergedStatus);
+        }
+        await this.sweepStatuses();
         this.render();
     }
 
@@ -1163,6 +1222,7 @@ class DendriteView extends ItemView {
         this.byId.set(id, fresh);
         this.active = id;
         await this.writeIndex();
+        await this.sweepStatuses();
         this.render();
         await this.startEdit(id);
     }
@@ -1179,6 +1239,7 @@ class DendriteView extends ItemView {
         if (!fn || !fn()) return;
         this.undo.push({ tree: before, active: this.active, files: [] });
         await this.writeIndex();
+        await this.sweepStatuses();
         this.render();
     }
 
@@ -1207,6 +1268,7 @@ class DendriteView extends ItemView {
             this.invalidate(n.id);
             if (f) await this.app.fileManager.trashFile(f);
         }
+        await this.sweepStatuses();
         this.render();
         new Notice(`Dendrite: deleted ${doomed.length} card(s). ` +
                    'Ctrl+Z in the view restores them.');
@@ -1247,8 +1309,8 @@ class DendriteView extends ItemView {
             const body = core.splitFrontmatter(
                 await this.app.vault.read(f)).body;
             if (body.trim() !== r.ifBody.trim()) continue;
-            await this.app.vault.process(f,
-                (data) => core.splitFrontmatter(data).fm + r.body);
+            await this.app.vault.process(f, (data) => (r.text !== undefined ?
+                r.text : core.splitFrontmatter(data).fm + r.body));
             this.invalidate(f.basename);
         }
         this.root = core.parseIndex(snap.tree + '\n').root;
@@ -1318,7 +1380,9 @@ class DendriteView extends ItemView {
         // or role set in the card's properties changes what is counted.
         this.updateNumbers();
         this.updateRoles();
+        this.updateStatuses();
         this.scheduleCounts();
+        this.clearFinishedSplit(f);
         // A label can come from aliases, which only the metadata cache
         // knows once parsed, so labels are synced here rather than on
         // modify.
@@ -1425,6 +1489,141 @@ class DendriteView extends ItemView {
     async setRole(id, role) {
         const f = this.cardFile(id);
         if (f) await writeProps(this.app, f, { dendrite_role: role });
+        await this.sweepStatuses();
+    }
+
+    // ---- card status ----------------------------------------------------
+
+    /** A card's set status: draft, done, revise or unsplit. */
+    statusOf(id) {
+        const s = this.cardProps(id).dendrite_status;
+        return core.STATUSES.includes(s) ? s : null;
+    }
+
+    /** Write a status; draft is the default and is written as none. */
+    async setStatus(id, status) {
+        const f = this.cardFile(id);
+        if (!f) return;
+        await writeProps(this.app, f, {
+            dendrite_status: status && status !== 'draft' ? status : null });
+    }
+
+    /**
+     * Show each card's status in its footer and the counts in the bar.
+     * A printing card shows its own status, a structural card the least
+     * finished state below it and how many cards there are flagged.
+     */
+    updateStatuses() {
+        if (!this.board) return;
+        const report = core.statusReport(this.root,
+            (id) => this.statusOf(id), (id) => this.roleOf(id));
+        this.statusInfo = report.cards;
+        for (const [id, card] of this.cardEls) {
+            const foot = card.querySelector(':scope > .dendrite-card-foot');
+            if (!foot) continue;
+            const old = foot.querySelector(':scope > .dendrite-status');
+            if (old) old.remove();
+            card.removeClass('is-flagged');
+            const info = report.cards.get(id);
+            if (!info) continue;
+            const chip = createDiv({ cls: 'dendrite-status' });
+            const show = (status, text) => {
+                const s = chip.createSpan({ cls: 'dendrite-status-chip ' +
+                                                 `is-${status}`, text });
+                const colour = this.plugin.statusColour(status);
+                if (colour) s.style.setProperty('--dendrite-chip', colour);
+            };
+            if (info.own === 'done') show('done', '✓ done');
+            else if (info.own === 'revise') show('revise', 'revise');
+            else if (info.own === 'unsplit') show('unsplit', 'unsplit');
+            if (!info.prints && info.below > 0) {
+                show('revise', `${info.below} to revise`);
+            } else if (!info.prints && info.derived === 'done' &&
+                       !info.own) {
+                show('done', '✓ done');
+            }
+            if (core.isFlag(info.own)) card.addClass('is-flagged');
+            if (!chip.childElementCount) continue;
+            const quota = foot.querySelector(':scope > .dendrite-quota');
+            if (quota && quota.nextSibling) {
+                foot.insertBefore(chip, quota.nextSibling);
+            } else {
+                foot.appendChild(chip);
+            }
+        }
+        if (this.statusEl) {
+            const t = report.tally;
+            const parts = [];
+            if (t.revise) parts.push(`${t.revise} revise`);
+            if (t.unsplit) parts.push(`${t.unsplit} unsplit`);
+            parts.push(`${t.draft} draft`, `${t.done} done`);
+            this.statusEl.setText(parts.join(' · '));
+            this.statusEl.toggleClass('has-flags', t.revise + t.unsplit > 0);
+        }
+        if (this.plugin.previewStatuses) {
+            this.plugin.previewStatuses(this.file);
+        }
+    }
+
+    /**
+     * Status belongs to text that prints. A card that no longer prints
+     * loses draft, done or revise; a card that prints again loses unsplit;
+     * an unsplit card with nothing left behind loses unsplit.
+     */
+    async sweepStatuses() {
+        for (const n of core.allNodes(this.root)) {
+            const s = this.statusOf(n.id);
+            if (!s) continue;
+            const prints = core.roleFor(n, (id) => this.roleOf(id)) ===
+                'prose';
+            if ((s === 'unsplit') === prints) {
+                await this.setStatus(n.id, null);
+            }
+        }
+    }
+
+    /** Clear unsplit once the card holds only its heading and comments. */
+    async clearFinishedSplit(file) {
+        if (!(file instanceof TFile)) return;
+        if (this.statusOf(file.basename) !== 'unsplit') return;
+        const body = core.splitFrontmatter(
+            await this.app.vault.cachedRead(file)).body;
+        if (!core.leftover(body)) await this.setStatus(file.basename, null);
+    }
+
+    /** The next or previous card in reading order that is flagged. */
+    nextFlagged(dir, test = (info) => core.isFlag(info.own)) {
+        const order = core.allNodes(this.root).filter((n) => {
+            const info = this.statusInfo && this.statusInfo.get(n.id);
+            return info && test(info);
+        });
+        if (!order.length) {
+            new Notice('Dendrite: no cards to go to.');
+            return;
+        }
+        const all = core.allNodes(this.root);
+        const at = all.findIndex((n) => n.id === this.active);
+        const pick = dir > 0 ?
+            order.find((n) => all.indexOf(n) > at) || order[0] :
+            [...order].reverse().find((n) => all.indexOf(n) < at) ||
+                order[order.length - 1];
+        this.select(pick.id);
+    }
+
+    /** + marks a printing card done; - sends it to revise. */
+    async stepStatus(up) {
+        const node = this.active && this.byId.get(this.active);
+        if (!node) return;
+        if (this.statusOf(node.id) === 'unsplit') {
+            if (up) await this.setStatus(node.id, null);
+            return;
+        }
+        if (core.roleFor(node, (x) => this.roleOf(x)) !== 'prose') {
+            new Notice('Dendrite: a structural card takes its status from ' +
+                       'the cards below it.');
+            return;
+        }
+        await this.setStatus(this.active, up ? 'done' : 'revise');
     }
 
     /** Mark cards that print nothing, and where a role was set by hand. */
@@ -1854,6 +2053,20 @@ class DendritePreview extends ItemView {
             const b = this.bodies.get(id);
             return b ? b.body : '';
         }, headingTop, numbers, roleOf);
+        // Only flagged cards are marked here, with a faint bar, so the
+        // preview stays a page to read.
+        const statusOf = (id) => {
+            const s = props(id).dendrite_status;
+            return core.STATUSES.includes(s) ? s : null;
+        };
+        const report = core.statusReport(root, statusOf, roleOf);
+        this.flags = new Map();
+        for (const [id, info] of report.cards) {
+            if (core.isFlag(info.own)) {
+                this.flags.set(id, this.plugin.statusColour ?
+                    this.plugin.statusColour(info.own) : null);
+            }
+        }
         this.renderSegments(segs);
     }
 
@@ -1884,6 +2097,12 @@ class DendritePreview extends ItemView {
                 if (this.observer && !empty) this.observer.observe(b.el);
             }
             b.el.toggleClass('is-active', s.id === this.active);
+            const flag = this.flags && this.flags.has(s.id);
+            b.el.toggleClass('is-flagged', !!flag);
+            if (flag && this.flags.get(s.id)) {
+                b.el.style.setProperty('--dendrite-chip',
+                                       this.flags.get(s.id));
+            }
             this.doc.appendChild(b.el);
         }
     }
@@ -2274,6 +2493,12 @@ module.exports = class DendritePlugin extends Plugin {
         viewCommand('move-to-child-card',
             'Move selection, or the rest of the card, to a new child card',
             true, (v) => v.moveSelection('child'));
+        viewCommand('next-flagged', 'Go to the next card to revise or ' +
+            'finish splitting', false, (v) => v.nextFlagged(1));
+        viewCommand('previous-flagged', 'Go to the previous card to ' +
+            'revise or finish splitting', false, (v) => v.nextFlagged(-1));
+        viewCommand('next-draft', 'Go to the next draft card', false,
+            (v) => v.nextFlagged(1, (i) => i.prints && i.own === 'draft'));
         viewCommand('merge-into-above', 'Merge card into the card above',
             false, (v) => v.merge('above'));
         viewCommand('merge-into-parent', 'Merge card into its parent',
@@ -2422,6 +2647,35 @@ module.exports = class DendritePlugin extends Plugin {
         const view = leaf.view;
         if (edit) await view.startEdit(id);
         else await view.select(id);
+    }
+
+    /**
+     * A status's colour, from Pretty Properties' colour for that value of
+     * dendrite_status, so the Properties panel, Bases and the board agree.
+     * Revise and unsplit fall back to orange; other values stay plain
+     * unless coloured there.
+     */
+    statusColour(status) {
+        const pp = this.app.plugins && this.app.plugins.plugins &&
+            this.app.plugins.plugins['pretty-properties'];
+        const c = pp && pp.settings && pp.settings.propertyColors &&
+            pp.settings.propertyColors.dendrite_status &&
+            pp.settings.propertyColors.dendrite_status[status];
+        const pill = c && c.pillColor;
+        if (pill && typeof pill === 'object' && 'h' in pill) {
+            return `hsl(${pill.h}, ${pill.s}%, ${pill.l}%)`;
+        }
+        if (pill && typeof pill === 'string' && pill !== 'default' &&
+            pill !== 'none') {
+            return pill.startsWith('#') ? pill : `var(--color-${pill})`;
+        }
+        return core.isFlag(status) ? 'var(--color-orange)' : null;
+    }
+
+    previewStatuses(file) {
+        for (const l of this.app.workspace.getLeavesOfType(PREVIEW)) {
+            if (l.view.file === file) l.view.scheduleRefresh();
+        }
     }
 
     previewActive(file, id) {

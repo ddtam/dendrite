@@ -22,7 +22,8 @@ async function open(indexText, cards = {}) {
     }
     const plugin = { settings: { headingTop: 1, cardWidth: 380,
                                  autosaveMs: 20, vimKeys: true },
-                     openAsMarkdown() {}, async lintCard() {} };
+                     openAsMarkdown() {}, async lintCard() {},
+                     statusColour: () => null };
     const view = new DendriteView({ app, updateHeader() {},
                                     detach() {} }, plugin);
     await view.onOpen();
@@ -645,7 +646,9 @@ test('moving a selection to a new card below or a child, and undoing it',
     // A bare cursor moves the rest of the card, into a child.
     view.editing.ta.setSelectionRange(12, 12);
     await view.moveSelection('child');
-    assert.equal(read(cardPath('G-aaaaa')), 'Keep this.');
+    assert.equal(read(cardPath('G-aaaaa')),
+                 '---\ndendrite_status: unsplit\n---\nKeep this.',
+                 'text left behind after a split into a child: unsplit');
     const child = view.byId.get('G-aaaaa').children[0];
     assert.equal(read(cardPath(child.id)), 'And keep this.');
     await view.endEdit();
@@ -750,4 +753,87 @@ test('the preview prints by role, follows edits, and links to the board',
     view.highlight('G-ccccc');
     assert.ok(view.blocks.get('G-ccccc').el.hasClass('is-active'));
     assert.ok(!b.hasClass('is-active'));
+});
+
+test('card status: chips, tally, keys, and status moving with text',
+     async () => {
+    const { view, read, app } = await open(
+        '---\ndendrite_prefix: G\n---\n' +
+        '- [[G-aaaaa|Aims]]\n    - [[G-bbbbb|p1]]\n    - [[G-ccccc|p2]]\n' +
+        '- [[G-ddddd|D]]\n',
+        { 'G-aaaaa': '# Aims',
+          'G-bbbbb': '---\ndendrite_status: done\n---\nFirst para.',
+          'G-ccccc': '---\ndendrite_status: revise\n---\nSecond para.',
+          'G-ddddd': 'Para D. More of D.' });
+    const chips = (id) => [...view.cardEls.get(id)
+        .querySelectorAll('.dendrite-status-chip')].map((c) => c.textContent);
+    assert.deepEqual(chips('G-bbbbb'), ['✓ done']);
+    assert.deepEqual(chips('G-ccccc'), ['revise']);
+    assert.deepEqual(chips('G-aaaaa'), ['1 to revise'],
+                     'a section counts what is flagged below it');
+    assert.deepEqual(chips('G-ddddd'), [], 'draft shows nothing');
+    assert.equal(view.statusEl.textContent, '1 revise · 1 draft · 1 done');
+    // ] goes to the next flagged card in reading order; - and + set
+    // revise and done.
+    const key = async (k) => {
+        view.contentEl.dispatchEvent(new h.window.KeyboardEvent('keydown',
+            { key: k, bubbles: true, cancelable: true }));
+        await tick(10);
+    };
+    view.active = 'G-aaaaa';
+    await key(']');
+    assert.equal(view.active, 'G-ccccc');
+    await key('+');
+    assert.match(read(cardPath('G-ccccc')), /dendrite_status: done/);
+    view.active = 'G-ddddd';
+    await key('-');
+    assert.match(read(cardPath('G-ddddd')), /dendrite_status: revise/);
+
+    // Moving text into a child: the child takes the status; the parent,
+    // now structural, is unsplit while text is left behind.
+    await view.startEdit('G-ddddd');
+    view.editing.ta.setSelectionRange(8, 8);
+    await view.moveSelection('child');
+    const child = view.byId.get('G-ddddd').children[0].id;
+    assert.match(read(cardPath(child)), /dendrite_status: revise/);
+    assert.match(read(cardPath('G-ddddd')), /dendrite_status: unsplit/);
+    // Finishing the split clears unsplit on its own.
+    view.editing.ta.setSelectionRange(0, 0);
+    await view.moveSelection('below');
+    await view.endEdit();
+    await view.clearFinishedSplit(view.cardFile('G-ddddd'));
+    assert.doesNotMatch(read(cardPath('G-ddddd')), /dendrite_status/);
+
+    // A done card that gains its first child stops printing and loses
+    // its status.
+    view.active = 'G-bbbbb';
+    await view.insert('child');
+    await view.endEdit();
+    assert.doesNotMatch(read(cardPath('G-bbbbb')), /dendrite_status/);
+
+    // Pretty Properties' colour for a value is used.
+    const plugin = Object.create(require('../src/main.js').prototype);
+    plugin.app = { plugins: { plugins: { 'pretty-properties': { settings: {
+        propertyColors: { dendrite_status: {
+            done: { pillColor: 'green' },
+            revise: { pillColor: { h: 10, s: 80, l: 50 } } } } } } } } };
+    assert.equal(plugin.statusColour('done'), 'var(--color-green)');
+    assert.equal(plugin.statusColour('revise'), 'hsl(10, 80%, 50%)');
+    assert.equal(plugin.statusColour('draft'), null);
+    plugin.app = { plugins: { plugins: {} } };
+    assert.equal(plugin.statusColour('unsplit'), 'var(--color-orange)');
+});
+
+test('merging keeps the less mature status', async () => {
+    const { view, read } = await open(
+        '---\ndendrite_prefix: G\n---\n- [[G-aaaaa|A]]\n- [[G-bbbbb|B]]\n',
+        { 'G-aaaaa': '---\ndendrite_status: done\n---\nA.',
+          'G-bbbbb': '---\ndendrite_status: revise\n---\nB.' });
+    view.active = 'G-bbbbb';
+    await view.merge('above');
+    assert.match(read(cardPath('G-aaaaa')),
+                 /dendrite_status: revise\n---\nA\.\n\nB\./);
+    await view.doUndo();
+    assert.match(read(cardPath('G-aaaaa')), /dendrite_status: done\n---\nA\./,
+                 'undo restores the status too');
 });

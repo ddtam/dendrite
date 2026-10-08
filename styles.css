@@ -614,3 +614,46 @@
     padding-left: 8px;
     margin: 4px 0;
 }
+
+/* Card status: a chip in the footer. Only flags (revise, unsplit) are
+   coloured by default; done is quiet; draft shows nothing. A colour set
+   for the value in Pretty Properties arrives as --dendrite-chip. */
+.dendrite-status {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    margin-left: 4px;
+    font-size: var(--font-ui-smaller);
+}
+
+.dendrite-status-chip {
+    padding: 0 6px;
+    border-radius: var(--radius-s);
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.dendrite-status-chip.is-revise,
+.dendrite-status-chip.is-unsplit {
+    color: var(--dendrite-chip, var(--color-orange));
+    background: color-mix(in srgb,
+                          var(--dendrite-chip, var(--color-orange)) 14%,
+                          transparent);
+}
+
+.dendrite-status-chip.is-done {
+    color: var(--dendrite-chip, var(--text-faint));
+}
+
+.dendrite-tally {
+    margin-left: 12px;
+    font-size: var(--font-ui-smaller);
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+/* In the preview, a flagged card's part has a faint bar at its left. */
+.dendrite-pblock.is-flagged {
+    box-shadow: inset 3px 0 0 color-mix(in srgb,
+        var(--dendrite-chip, var(--color-orange)) 55%, transparent);
+}

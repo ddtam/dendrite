@@ -563,6 +563,82 @@ function threadPath(pairs) {
     return parts.join(' ');
 }
 
+// ---- card status ------------------------------------------------------------
+
+/**
+ * A card's status describes its text. Cards that print their text carry
+ * draft (the default), done or revise. A structural card carries no
+ * status of its own except unsplit: text left behind when part of it was
+ * moved into a child, which may be a split never finished.
+ */
+const STATUSES = ['draft', 'done', 'revise', 'unsplit'];
+// How much work a status asks for, to find a branch's least-finished
+// state: revise and unsplit are flags; draft is unfinished; done is done.
+const URGENCY = { done: 0, draft: 1, revise: 2, unsplit: 2 };
+// How mature text is, for a merge to keep the less mature of two.
+const MATURITY = { revise: 0, draft: 1, done: 2 };
+
+function isFlag(status) {
+    return status === 'revise' || status === 'unsplit';
+}
+
+/** A card's text beyond its heading line and comments, trimmed. */
+function leftover(body) {
+    const lines = stripComments(body || '').trim().split('\n');
+    if (lines.length && HEADING.test(lines[0].trim())) lines.shift();
+    return lines.join('\n').trim();
+}
+
+/** The less mature of two statuses of printing text. */
+function lowerStatus(a, b) {
+    const x = MATURITY[a] === undefined ? 1 : MATURITY[a];
+    const y = MATURITY[b] === undefined ? 1 : MATURITY[b];
+    return x <= y ? (a || 'draft') : (b || 'draft');
+}
+
+/**
+ * Every card's status, as shown. `statusOf(id)` is the set status or
+ * null; `roleOf(id)` the set role or null. Returns
+ *   { cards: Map id -> { prints, own, derived, below }, tally }
+ * where `own` is a printing card's status (draft when unset) or a
+ * structural card's unsplit, `derived` a structural card's least-finished
+ * printing descendant, and `below` how many flagged cards its branch
+ * holds. Left-out branches count for nothing. `tally` counts printing
+ * cards by status, plus unsplit structural cards.
+ */
+function statusReport(root, statusOf, roleOf) {
+    const cards = new Map();
+    const tally = { revise: 0, unsplit: 0, draft: 0, done: 0 };
+    const walk = (node) => {
+        const role = roleFor(node, roleOf);
+        if (role === 'notes') return null;
+        const prints = role === 'prose';
+        const set = statusOf(node.id);
+        let own = null;
+        if (prints) own = ['done', 'revise'].includes(set) ? set : 'draft';
+        else if (set === 'unsplit') own = 'unsplit';
+        if (own) tally[own] += 1;
+        let worst = prints ? own : null;
+        let below = 0;
+        for (const c of node.children) {
+            const r = walk(c);
+            if (!r) continue;
+            below += r.below + (isFlag(r.own) ? 1 : 0);
+            const w = r.worst;
+            if (w && (!worst || URGENCY[w] > URGENCY[worst])) worst = w;
+        }
+        const derived = prints ? null : (node.children.length ? worst : null);
+        const info = { prints, own, derived, below,
+                       worst: own && !prints ?
+                           (worst && URGENCY[worst] > URGENCY[own] ?
+                               worst : own) : worst };
+        cards.set(node.id, info);
+        return info;
+    };
+    for (const n of root.children) walk(n);
+    return { cards, tally };
+}
+
 // ---- limits and counts ---------------------------------------------------
 
 // An amount, which may be a fraction, then a unit.
@@ -714,6 +790,7 @@ module.exports = {
     splitText, mergeText,
     mergeIntoAbove, mergeIntoParent,
     flowPath, threadPath, exportSegments, roleFor, ROLES,
+    STATUSES, isFlag, leftover, lowerStatus, statusReport,
     INDENT, splitFrontmatter, parseIndex, serialiseTree, writeIndexText,
     deriveLabel, stripComments, validPrefix, newId, makeNode, makeRoot,
     insertSibling, appendChild, moveWithin, indent, outdent, remove,

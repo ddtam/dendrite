@@ -437,3 +437,39 @@ test('roles decide what a card prints, and segments show what is left out',
     assert.equal(nums.get('A'), '2.');
     assert.equal(nums.has('N'), false);
 });
+
+test('status: printing cards carry their own, sections show the worst ' +
+     'below, left-out branches do not count', () => {
+    const root = c.makeRoot();
+    const mk = (id, parent) => {
+        const n = c.makeNode(id, id, null);
+        c.appendChild(parent, n);
+        return n;
+    };
+    const s = mk('S', root);
+    mk('P1', s);
+    mk('P2', s);
+    const u = mk('U', s);
+    mk('P3', u);
+    const n = mk('N', root);
+    mk('Q', n);
+    const statuses = { P1: 'done', P2: 'revise', U: 'unsplit', P3: 'done',
+                       Q: 'revise', S: 'done' };
+    const roles = { N: 'notes' };
+    const r = c.statusReport(root, (id) => statuses[id] || null,
+                             (id) => roles[id] || null);
+    const get = (id) => r.cards.get(id);
+    assert.equal(get('P1').own, 'done');
+    assert.equal(get('S').own, null, 'a section has no status of its own');
+    assert.equal(get('S').derived, 'revise', 'the worst printing card below');
+    assert.equal(get('S').below, 2, 'P2 to revise and U unsplit');
+    assert.equal(get('U').own, 'unsplit');
+    assert.equal(get('U').derived, 'done');
+    assert.equal(r.cards.has('Q'), false, 'notes branches do not count');
+    assert.deepEqual(r.tally, { revise: 1, unsplit: 1, draft: 0, done: 2 });
+    assert.equal(c.leftover('# Head\nLeft behind. %% note %%'),
+                 'Left behind.');
+    assert.equal(c.leftover('# Head\n%% only a note %%'), '');
+    assert.equal(c.lowerStatus('done', 'revise'), 'revise');
+    assert.equal(c.lowerStatus('done', null), 'draft');
+});

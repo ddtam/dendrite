@@ -132,6 +132,23 @@ Each card has a role, which decides what of it prints:
 
 Set a card's role from its right-click menu; it is stored as `dendrite_role` (`section`, `prose` or `notes`) on the card. An outline card in the first column, holding a heading and your notes, is set to **Heading only** so its notes stay out even before it has children. A left-out card shows with a dashed outline; a heading-only card shows its notes muted. `%% comments %%` never print.
 
+## Card status
+
+A card's status describes its text, set on the cards that print it, as `dendrite_status`:
+
+| Status | Meaning |
+| --- | --- |
+| draft | written, not yet worked over (the default, written as no status) |
+| done | "I like where this is; leave it" |
+| revise | needs another pass, from your own read or a reviewer's comment |
+| unsplit | set by Dendrite on a card whose text you started moving into children and left some behind |
+
+Only revise and unsplit are coloured, as flags: a chip on the card and a faint bar in the preview. Done shows a quiet tick; draft shows nothing. A section, which prints only its heading, shows how many cards below it are flagged. The bar tallies the statuses, so near submission the draft count is what is left.
+
+**+** marks the active card done and **−** sends it to revise; **]** and **[** go to the next and previous flagged card, and a command goes to the next draft. Moved text keeps its card's status, and a merge keeps the less mature of the two. A card that stops printing, because it gained children, loses its status; unsplit clears itself once only the heading and comments are left, or with **Keep the leftover text as notes**.
+
+Colours come from the [Pretty Properties](https://github.com/anareaty/pretty-properties) plugin, if it gives `dendrite_status` values a colour, so the Properties panel and the board agree.
+
 ## Preview
 
 **Preview** in the bar opens the manuscript as export would print it, beside the board, updating as cards save. Each card's part is its own block: click one to select that card on the board, double-click to edit it, and the board's active card is highlighted in the preview. **Show left out** also shows, dimmed, the text that does not print, so you can check what your roles leave out. Editing stays in the cards, since the printed text is transformed (headings levelled and numbered, notes and comments dropped).
