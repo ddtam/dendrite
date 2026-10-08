@@ -17,7 +17,7 @@ Without the plugin, the index still reads as a clickable outline and every card 
 
 ## Install
 
-Through [BRAT](https://github.com/TfTHacker/obsidian42-brat): add `ddtam/dendrite` as a beta plugin.
+Through [BRAT](https://github.com/TfTHacker/obsidian42-brat): add `ddtam/obsidian-dendrite` as a beta plugin.
 
 ## Use
 
