@@ -321,3 +321,46 @@ test('in edit mode the Ctrl shortcuts reach the text, not the view',
     assert.equal(handler(['Mod'], 'ArrowDown')(), false,
                  'in normal mode the shortcut acts');
 });
+
+test('the Linter exemption is added once and only its own entry moves',
+     async () => {
+    const DendritePlugin = require('../src/main.js');
+    const make = (folders) => {
+        const linter = { settings: { foldersToIgnore: folders }, saves: 0,
+                         async saveSettings() { this.saves++; } };
+        const p = new DendritePlugin();
+        p.app = { plugins: { plugins: { 'obsidian-linter': linter } } };
+        p.settings = { writingFolder: 'Writing', manageLinter: true,
+                       linterAdded: null };
+        p.saveData = async () => {};
+        return { p, linter };
+    };
+    const { p, linter } = make(['Templates']);
+    await p.syncLinter();
+    assert.deepEqual(linter.settings.foldersToIgnore,
+                     ['Templates', 'Writing']);
+    assert.equal(p.settings.linterAdded, 'Writing');
+    await p.syncLinter();
+    assert.equal(linter.saves, 1, 'nothing rewritten when already right');
+    p.settings.writingFolder = 'Drafts';
+    await p.syncLinter();
+    assert.deepEqual(linter.settings.foldersToIgnore,
+                     ['Templates', 'Drafts'], 'its own entry moved');
+    p.settings.manageLinter = false;
+    await p.syncLinter();
+    assert.deepEqual(linter.settings.foldersToIgnore, ['Templates']);
+    assert.equal(p.settings.linterAdded, null);
+
+    const own = make(['Writing']);
+    await own.p.syncLinter();
+    assert.equal(own.p.settings.linterAdded, null, 'the entry was not ours');
+    own.p.settings.manageLinter = false;
+    await own.p.syncLinter();
+    assert.deepEqual(own.linter.settings.foldersToIgnore, ['Writing'],
+                     'a hand-added entry is never removed');
+
+    const none = new DendritePlugin();
+    none.app = { plugins: { plugins: {} } };
+    none.settings = { writingFolder: 'Writing', manageLinter: true };
+    await none.syncLinter();
+});

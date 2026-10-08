@@ -30,7 +30,12 @@ const DEFAULTS = {
     autosaveMs: 600,
     openInDendrite: true,
     vimKeys: true,
+    manageLinter: true,
+    // The Linter ignore entry Dendrite added itself, if any, so that only
+    // that entry is ever removed again.
+    linterAdded: null,
 };
+const LINTER_ID = 'obsidian-linter';
 // A card note is `<prefix>-<5 characters>.md` inside a `cards` folder.
 const CARD_NAME = /^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*-[a-z0-9]{5}$/;
 const UNDO_DEPTH = 50;
@@ -1380,6 +1385,12 @@ class DendriteSettings extends PluginSettingTab {
         this.plugin = plugin;
     }
 
+    // Linter's ignore list follows the writing folder once the settings
+    // are closed, not on every keystroke while the folder is typed.
+    hide() {
+        this.plugin.syncLinter();
+    }
+
     display() {
         const { containerEl } = this;
         const s = this.plugin.settings;
@@ -1389,6 +1400,15 @@ class DendriteSettings extends PluginSettingTab {
             .setDesc('Where new manuscripts are created, one folder each.')
             .addText((t) => t.setValue(s.writingFolder).onChange((v) => {
                 s.writingFolder = v.trim();
+                save();
+            }));
+        new Setting(containerEl).setName('Keep Linter out of the writing ' +
+                                         'folder')
+            .setDesc('Adds the writing folder to the Linter plugin\'s ' +
+                     'folders to ignore, so its rules never rewrite a ' +
+                     'card. Off removes the entry, if Dendrite added it.')
+            .addToggle((tg) => tg.setValue(s.manageLinter).onChange((v) => {
+                s.manageLinter = v;
                 save();
             }));
         new Setting(containerEl).setName('Top section heading level')
@@ -1473,6 +1493,7 @@ module.exports = class DendritePlugin extends Plugin {
             (leaf) => this.decorate(leaf)));
         this.app.workspace.onLayoutReady(() => {
             this.app.workspace.iterateAllLeaves((l) => this.decorate(l));
+            this.syncLinter();
         });
         this.registerEvent(this.app.workspace.on('file-menu', (menu, f) => {
             if (!isIndex(this.app, f)) return;
@@ -1483,6 +1504,48 @@ module.exports = class DendritePlugin extends Plugin {
 
     async saveSettings() {
         await this.saveData(this.settings);
+    }
+
+    /**
+     * Keep the writing folder in Linter's folders to ignore, so Linter's
+     * rules, "File name heading" above all, never rewrite a card. Only an
+     * entry Dendrite added is ever removed, and Linter's own settings
+     * object is changed, so the change applies without a reload.
+     */
+    async syncLinter() {
+        const linter = this.app.plugins && this.app.plugins.plugins &&
+            this.app.plugins.plugins[LINTER_ID];
+        const ls = linter && linter.settings;
+        if (!ls || !Array.isArray(ls.foldersToIgnore)) return;
+        const want = this.settings.manageLinter ?
+            normalizePath(this.settings.writingFolder) : null;
+        const list = ls.foldersToIgnore;
+        const had = this.settings.linterAdded;
+        let changed = false;
+        if (had && had !== want && list.includes(had)) {
+            list.splice(list.indexOf(had), 1);
+            changed = true;
+        }
+        let added = had === want ? had : null;
+        if (want && !list.includes(want)) {
+            list.push(want);
+            added = want;
+            changed = true;
+            new Notice(`Dendrite added ${want} to Linter's folders to ` +
+                       'ignore, so Linter does not rewrite cards. This is ' +
+                       'a setting in Dendrite.');
+        }
+        if (changed) {
+            if (typeof linter.saveSettings === 'function') {
+                await linter.saveSettings();
+            } else {
+                await linter.saveData(ls);
+            }
+        }
+        if (added !== this.settings.linterAdded) {
+            this.settings.linterAdded = added;
+            await this.saveSettings();
+        }
     }
 
     rerender() {

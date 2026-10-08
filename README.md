@@ -90,6 +90,10 @@ A limit is in words, characters or pages, and is counted from what export would 
 | `dendrite_number_sections` | index | `true` to number sections by position |
 | `dendrite_heading_top` | index | the heading level of a top-level section |
 
+## Other plugins
+
+Cards are ordinary notes, so any plugin that rewrites notes acts on them too. The [Linter](https://github.com/platers/obsidian-linter) plugin's "File name heading" rule would insert a card's ID as its heading, so Dendrite adds the writing folder to Linter's **Folders to ignore**, once and with a notice. It removes only an entry it added itself, and the setting **Keep Linter out of the writing folder** turns this off.
+
 ## Labels
 
 The index shows each card by a label: the card's heading line if it starts with one, else the first of its `aliases`, else its first words. Dendrite keeps the index's labels in step with the cards, so edit a label in the card, not in the index.
