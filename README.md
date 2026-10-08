@@ -47,9 +47,9 @@ In the editor:
 | --- | --- |
 | Arrow keys | Move between cards: up and down within a column, left to the parent, right to a child |
 | Enter, or double-click | Edit the card |
-| Escape, or Ctrl+Enter | Save and leave the editor |
-| Ctrl+↓ / Ctrl+↑ (or Ctrl+J / Ctrl+K) | New card below / above |
-| Ctrl+→ (or Ctrl+L) | New child card |
+| Escape | Save and leave the editor |
+| Ctrl+↓ / Ctrl+↑ (or Ctrl+J / Ctrl+K) | New card below / above, in normal mode |
+| Ctrl+→ (or Ctrl+L) | New child card, in normal mode |
 | Alt+↑ / Alt+↓ | Move the card among its siblings |
 | Alt+→ / Alt+← | Indent under the card above / outdent |
 | Ctrl+Backspace | Delete the card and its children |
@@ -57,7 +57,7 @@ In the editor:
 
 ### Vim-style keys
 
-In normal mode, shown as **NORMAL** in the bar, no card is being edited and letters are commands. **INSERT** means a card is open for writing; Escape returns to normal mode. They can be turned off in the settings.
+In normal mode, shown as **NORMAL** in the bar, no card is being edited and letters are commands. **INSERT** means a card is open for writing. In insert mode every key belongs to the text, Ctrl+arrows for moving by word included, and Escape is the only way back to normal mode. They can be turned off in the settings.
 
 | Key | Action |
 | --- | --- |

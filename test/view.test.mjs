@@ -303,3 +303,21 @@ test('vim keys move, insert, rearrange and delete in normal mode',
     await key('G');
     assert.equal(view.active, fresh);
 });
+
+test('in edit mode the Ctrl shortcuts reach the text, not the view',
+     async () => {
+    const { view } = await open(
+        '---\ndendrite_prefix: G\n---\n- [[G-aaaaa|A]]\n', { 'G-aaaaa': 'A' });
+    await view.startEdit('G-aaaaa');
+    const handler = (mods, key) => view.scope.keys.find((k) =>
+        k.key === key && JSON.stringify(k.mods) === JSON.stringify(mods)).fn;
+    for (const key of ['ArrowRight', 'ArrowDown', 'ArrowUp', 'j', 'k', 'l',
+                       'Enter']) {
+        assert.equal(handler(['Mod'], key)(), true, 'Ctrl+' + key);
+    }
+    assert.equal(view.root.children.length, 1, 'no card was created');
+    assert.equal(view.editing.id, 'G-aaaaa', 'still editing');
+    await view.endEdit();
+    assert.equal(handler(['Mod'], 'ArrowDown')(), false,
+                 'in normal mode the shortcut acts');
+});

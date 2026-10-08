@@ -991,8 +991,8 @@ var DendriteView = class extends ItemView {
       return false;
     });
     s.register(["Mod"], "Enter", () => {
-      if (this.editing) this.endEdit();
-      else if (this.active) this.startEdit(this.active);
+      if (this.editing) return true;
+      if (this.active) this.startEdit(this.active);
       return false;
     });
     for (const [key, where] of [
@@ -1004,6 +1004,7 @@ var DendriteView = class extends ItemView {
       ["l", "child"]
     ]) {
       s.register(["Mod"], key, () => {
+        if (this.editing) return true;
         this.insert(where);
         return false;
       });

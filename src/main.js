@@ -580,9 +580,12 @@ class DendriteView extends ItemView {
             this.endEdit();
             return false;
         });
+        // In edit mode every key belongs to the card's text, Ctrl+arrows
+        // for moving by word included; Escape is the only way out. These
+        // shortcuts therefore act in normal mode only.
         s.register(['Mod'], 'Enter', () => {
-            if (this.editing) this.endEdit();
-            else if (this.active) this.startEdit(this.active);
+            if (this.editing) return true;
+            if (this.active) this.startEdit(this.active);
             return false;
         });
         for (const [key, where] of [['ArrowDown', 'below'], ['j', 'below'],
@@ -590,6 +593,7 @@ class DendriteView extends ItemView {
                                     ['ArrowRight', 'child'],
                                     ['l', 'child']]) {
             s.register(['Mod'], key, () => {
+                if (this.editing) return true;
                 this.insert(where);
                 return false;
             });
