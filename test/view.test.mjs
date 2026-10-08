@@ -240,3 +240,19 @@ test('bold, tab and list enter edit the card and are saved', async () => {
     assert.equal(view.editKey('bold'), true,
                  'outside the editor the key goes through');
 });
+
+test('the active path flows into each child group', async () => {
+    const { view } = await open(
+        '---\ndendrite_prefix: G\n---\n' +
+        '- [[G-aaaaa|A]]\n    - [[G-bbbbb|B]]\n        - [[G-ccccc|C]]\n' +
+        '- [[G-ddddd|D]]\n    - [[G-eeeee|E]]\n',
+        { 'G-aaaaa': 'A', 'G-bbbbb': 'B', 'G-ccccc': 'C', 'G-ddddd': 'D',
+          'G-eeeee': 'E' });
+    await view.select('G-bbbbb');
+    view.drawFlow();
+    const flows = [...view.board.querySelectorAll('.is-flow')]
+        .map((g) => g.querySelector('.dendrite-card').dataset.id);
+    assert.deepEqual(flows.sort(), ['G-bbbbb', 'G-ccccc'],
+                     'A opens into its children, B into its own');
+    assert.equal(view.flowSvg.querySelectorAll('path').length, 2);
+});

@@ -61,6 +61,34 @@
     color: var(--text-warning);
 }
 
+.dendrite-stage {
+    position: relative;
+    flex: 1 1 auto;
+    display: flex;
+    min-height: 0;
+    --dendrite-flow: color-mix(in srgb, var(--interactive-accent) 14%,
+                               transparent);
+}
+
+/* Drawn over the board, under nothing that takes clicks. */
+.dendrite-flow {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    overflow: hidden;
+}
+
+.dendrite-flow path {
+    fill: var(--dendrite-flow);
+}
+
+/* The children a parent opens into share the band's tint. */
+.dendrite-group.is-flow {
+    background: var(--dendrite-flow);
+}
+
 .dendrite-board {
     --dendrite-col-width: calc(var(--dendrite-card-width, 380px) +
                                2 * var(--dendrite-gap));
@@ -114,6 +142,7 @@
     margin-bottom: 20px;
     padding: 4px;
     border-radius: var(--radius-m);
+    transition: background-color 150ms ease;
 }
 
 .dendrite-card {

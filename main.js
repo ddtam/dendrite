@@ -577,8 +577,14 @@ var DendriteView = class extends ItemView {
       return;
     }
     this.renderBar(el);
-    const board = el.createDiv({ cls: "dendrite-board" });
+    const stage = el.createDiv({ cls: "dendrite-stage" });
+    const board = stage.createDiv({ cls: "dendrite-board" });
     this.board = board;
+    const NS = "http://www.w3.org/2000/svg";
+    this.flowSvg = document.createElementNS(NS, "svg");
+    this.flowSvg.classList.add("dendrite-flow");
+    stage.appendChild(this.flowSvg);
+    board.addEventListener("scroll", () => this.scheduleFlow(), true);
     const cols = core.columns(this.root);
     this.cols = cols;
     if (!cols.length) {
@@ -732,6 +738,7 @@ var DendriteView = class extends ItemView {
       now.removeClass("is-pending");
       now.removeClass("is-missing");
       if (this.lineage && this.lineage.has(id)) this.centre(false);
+      this.scheduleFlow();
     }
   }
   /** Highlight the active card's lineage and bring it into view. */
@@ -754,6 +761,50 @@ var DendriteView = class extends ItemView {
       el.toggleClass("is-lineage", lineage.has(id));
     }
     this.renderToolbar();
+    this.scheduleFlow();
+  }
+  scheduleFlow() {
+    if (this.flowFrame) return;
+    this.flowFrame = requestAnimationFrame(() => {
+      this.flowFrame = null;
+      this.drawFlow();
+    });
+  }
+  /**
+   * Gingko's flow: a band from the right edge of each card on the active
+   * path, from the root down to the active card, widening to the left
+   * edge of the group holding its children in the next column.
+   */
+  drawFlow() {
+    const svg = this.flowSvg;
+    if (!svg || !this.board) return;
+    while (svg.firstChild) svg.firstChild.remove();
+    for (const g of this.board.querySelectorAll(".is-flow")) {
+      g.classList.remove("is-flow");
+    }
+    const node = this.active && this.byId.get(this.active);
+    if (!node) return;
+    const box = svg.getBoundingClientRect();
+    const NS = "http://www.w3.org/2000/svg";
+    for (let n = node; n && n.id; n = n.parent) {
+      if (!n.children.length) continue;
+      const card = this.cardEls.get(n.id);
+      const child = this.cardEls.get(n.children[0].id);
+      const group = child && child.parentElement;
+      if (!card || !group) continue;
+      group.classList.add("is-flow");
+      const a = card.getBoundingClientRect();
+      const b = group.getBoundingClientRect();
+      const x1 = a.right - box.left;
+      const x2 = b.left - box.left;
+      const mx = (x1 + x2) / 2;
+      const [at, ab] = [a.top - box.top, a.bottom - box.top];
+      const [bt, bb] = [b.top - box.top, b.bottom - box.top];
+      const d = `M${x1},${at} C${mx},${at} ${mx},${bt} ${x2},${bt} L${x2},${bb} C${mx},${bb} ${mx},${ab} ${x1},${ab} Z`;
+      const path = document.createElementNS(NS, "path");
+      path.setAttribute("d", d);
+      svg.appendChild(path);
+    }
   }
   /**
    * Centre the active card, horizontally and vertically, and in every

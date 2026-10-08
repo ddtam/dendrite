@@ -12,6 +12,7 @@ global.window = w;
 global.document = w.document;
 global.HTMLElement = w.HTMLElement;
 global.Event = w.Event;
+global.requestAnimationFrame = (fn) => setTimeout(fn, 0);
 
 const P = w.HTMLElement.prototype;
 function make(tag, o = {}, parent) {
