@@ -134,6 +134,15 @@ class DendriteView extends ItemView {
             (e) => this.onClick(e));
         this.registerDomEvent(this.contentEl, 'keydown',
             (e) => this.onNavKey(e));
+        // Right-click, or a long-press on a phone, opens a card's menu at
+        // the pointer; inside the editor the text keeps its own menu.
+        this.registerDomEvent(this.contentEl, 'contextmenu', async (e) => {
+            const card = e.target.closest('.dendrite-card');
+            if (!card || e.target.closest('textarea')) return;
+            e.preventDefault();
+            await this.select(card.dataset.id);
+            this.cardMenu(card, e);
+        });
         this.registerDomEvent(this.contentEl, 'dblclick', (e) => {
             const card = e.target.closest('.dendrite-card');
             if (card && !this.editing) this.startEdit(card.dataset.id);
@@ -215,6 +224,7 @@ class DendriteView extends ItemView {
         this.flowSvg.classList.add('dendrite-flow');
         stage.appendChild(this.flowSvg);
         board.addEventListener('scroll', () => this.scheduleFlow(), true);
+        this.renderOrphans(stage);
         const cols = core.columns(this.root);
         this.cols = cols;
         if (!cols.length) {
@@ -267,14 +277,49 @@ class DendriteView extends ItemView {
         btn('settings', 'Settings', 'This manuscript\'s settings',
             () => new ManuscriptModal(this).open());
         this.totalEl = bar.createDiv({ cls: 'dendrite-total' });
-        const unlinked = this.unlinkedCards();
-        if (unlinked.length) {
-            const warn = bar.createDiv({ cls: 'dendrite-warn' });
-            warn.setText(`${unlinked.length} card note(s) in cards/ are ` +
-                         'not in the index');
-            const fix = warn.createEl('button', { text: 'Add at the end' });
-            fix.onclick = () => this.adopt(unlinked);
+    }
+
+    /**
+     * Card notes in cards/ that the index does not link, in a panel
+     * floating over the board's top right, each to add or to delete.
+     */
+    async renderOrphans(stage) {
+        const files = this.unlinkedCards();
+        if (!files.length) return;
+        const panel = stage.createDiv({ cls: 'dendrite-orphans' });
+        const head = panel.createDiv({ cls: 'dendrite-orphans-head' });
+        head.createSpan({ text: `${files.length} card note(s) not in ` +
+                          'the index' });
+        const list = panel.createDiv({ cls: 'dendrite-orphans-list' });
+        const empty = [];
+        for (const f of files) {
+            const body = core.splitFrontmatter(
+                await this.app.vault.cachedRead(f)).body;
+            if (!body.trim()) empty.push(f);
+            const row = list.createDiv({ cls: 'dendrite-orphan' });
+            row.createSpan({ cls: 'dendrite-orphan-label',
+                             text: core.deriveLabel(body, null) || 'empty' });
+            const add = row.createEl('button', { text: 'Add' });
+            add.setAttr('aria-label', 'Add at the end of the index');
+            add.onclick = () => this.adopt([f]);
+            const del = row.createEl('button', { cls: 'mod-warning',
+                                                 text: 'Delete' });
+            del.setAttr('aria-label', 'Move the note to the trash');
+            del.onclick = () => this.trashOrphans([f]);
         }
+        const foot = panel.createDiv({ cls: 'dendrite-orphans-foot' });
+        const all = foot.createEl('button', { text: 'Add all' });
+        all.onclick = () => this.adopt(files);
+        if (empty.length) {
+            const b = foot.createEl('button', { cls: 'mod-warning',
+                text: `Delete ${empty.length} empty` });
+            b.onclick = () => this.trashOrphans(empty);
+        }
+    }
+
+    async trashOrphans(files) {
+        for (const f of files) await this.app.fileManager.trashFile(f);
+        this.render();
     }
 
     renderShell(group, n) {
@@ -487,7 +532,7 @@ class DendriteView extends ItemView {
         this.toolbar = t;
     }
 
-    cardMenu(anchor) {
+    cardMenu(anchor, event) {
         const { Menu } = require('obsidian');
         const m = new Menu();
         const item = (title, icon, fn) => m.addItem((i) =>
@@ -500,6 +545,8 @@ class DendriteView extends ItemView {
         item('Indent (Alt+→)', 'indent', () => this.structural('indent'));
         item('Outdent (Alt+←)', 'outdent', () => this.structural('outdent'));
         m.addSeparator();
+        item('Card properties…', 'sliders-horizontal',
+             () => new CardModal(this, this.active).open());
         item('Export this branch', 'file-output',
              () => this.exportTo(this.byId.get(this.active)));
         item('Open card note', 'file', () => {
@@ -509,6 +556,10 @@ class DendriteView extends ItemView {
         m.addSeparator();
         item('Delete card and its children (Ctrl+Backspace)', 'trash-2',
              () => this.deleteActive());
+        if (event) {
+            m.showAtMouseEvent(event);
+            return;
+        }
         const r = anchor.getBoundingClientRect();
         m.showAtPosition({ x: r.left, y: r.bottom });
     }
@@ -828,9 +879,9 @@ class DendriteView extends ItemView {
 
     // ---- structure -------------------------------------------------------
 
-    snapshot(files = []) {
+    snapshot(files = [], created = []) {
         this.undo.push({ tree: core.serialiseTree(this.root),
-                         active: this.active, files });
+                         active: this.active, files, created });
         if (this.undo.length > UNDO_DEPTH) this.undo.shift();
     }
 
@@ -875,8 +926,9 @@ class DendriteView extends ItemView {
         if (this.editing) await this.endEdit();
         const node = this.active && this.byId.get(this.active);
         const id = core.newId(prefix, (x) => this.taken(x));
-        await this.createCardFile(id);
-        this.snapshot();
+        const made = await this.createCardFile(id);
+        // Undoing the insert also removes the new note, while it is empty.
+        this.snapshot([], [made.path]);
         const fresh = core.makeNode(id, '', null);
         if (!node || where === 'first') {
             core.appendChild(this.root, fresh);
@@ -947,6 +999,18 @@ class DendriteView extends ItemView {
         for (const { path, data } of snap.files) {
             if (!this.app.vault.getAbstractFileByPath(path)) {
                 await this.app.vault.create(path, data);
+            }
+        }
+        // A card created by the undone insert goes with it, unless text
+        // was written into it, which undo never discards.
+        for (const path of snap.created || []) {
+            const f = this.app.vault.getAbstractFileByPath(path);
+            if (!(f instanceof TFile)) continue;
+            const body = core.splitFrontmatter(
+                await this.app.vault.read(f)).body;
+            if (!body.trim()) {
+                this.invalidate(f.basename);
+                await this.app.fileManager.trashFile(f);
             }
         }
         this.root = core.parseIndex(snap.tree + '\n').root;

@@ -398,3 +398,67 @@ test('a changed card is linted with the card-breaking rules off',
                  true, 'Linter\'s own settings are restored');
     assert.equal(read(cardPath('G-aaaaa')), 'An *emphasised* word');
 });
+
+test('undoing a new card removes its note unless text was written',
+     async () => {
+    const { view, read, app } = await open(
+        '---\ndendrite_prefix: G\n---\n- [[G-aaaaa|A]]\n', { 'G-aaaaa': 'A' });
+    view.active = 'G-aaaaa';
+    await view.insert('child');
+    const blank = view.active;
+    await view.endEdit();
+    await view.doUndo();
+    assert.equal(read(cardPath(blank)), undefined, 'empty note removed');
+    assert.deepEqual(view.unlinkedCards(), []);
+    view.active = 'G-aaaaa';
+    await view.insert('child');
+    const kept = view.active;
+    type(view, 'Some words');
+    await view.endEdit();
+    await view.doUndo();
+    assert.equal(read(cardPath(kept)), 'Some words', 'text is never lost');
+    assert.deepEqual(view.unlinkedCards().map((f) => f.basename), [kept]);
+});
+
+test('the orphan panel adds or deletes each unlinked note', async () => {
+    const { view, read } = await open(
+        '---\ndendrite_prefix: G\n---\n- [[G-aaaaa|A]]\n',
+        { 'G-aaaaa': 'A', 'G-empty': '', 'G-words': 'Lost words' });
+    await tick(20);
+    const panel = view.contentEl.querySelector('.dendrite-orphans');
+    assert.ok(panel, 'the panel floats over the board');
+    const labels = [...panel.querySelectorAll('.dendrite-orphan-label')]
+        .map((e) => e.textContent).sort();
+    assert.deepEqual(labels, ['Lost words', 'empty']);
+    const delEmpty = [...panel.querySelectorAll('button')]
+        .find((b) => b.textContent === 'Delete 1 empty');
+    delEmpty.click();
+    await tick(20);
+    assert.equal(read(cardPath('G-empty')), undefined);
+    assert.equal(read(cardPath('G-words')), 'Lost words');
+    const panel2 = view.contentEl.querySelector('.dendrite-orphans');
+    [...panel2.querySelectorAll('button')]
+        .find((b) => b.textContent === 'Add').click();
+    await tick(20);
+    assert.match(read(INDEX), /\[\[G-words\|Lost words\]\]/);
+    assert.equal(view.contentEl.querySelector('.dendrite-orphans'), null);
+});
+
+test('right-click opens the card menu at the pointer, delete included',
+     async () => {
+    const { view } = await open(
+        '---\ndendrite_prefix: G\n---\n- [[G-aaaaa|A]]\n- [[G-bbbbb|B]]\n',
+        { 'G-aaaaa': 'A', 'G-bbbbb': 'B' });
+    const card = view.cardEls.get('G-bbbbb');
+    card.dispatchEvent(new h.window.MouseEvent('contextmenu',
+        { bubbles: true, cancelable: true }));
+    await tick(10);
+    assert.equal(view.active, 'G-bbbbb', 'the card is selected');
+    const menu = h.obsidian.lastMenu;
+    assert.equal(menu.shown, 'mouse');
+    const del = menu.items.find((i) => /^Delete/.test(i.title));
+    assert.ok(del, 'the menu offers delete');
+    await del.click();
+    await tick(10);
+    assert.ok(!view.byId.has('G-bbbbb'));
+});

@@ -216,7 +216,27 @@ const obsidian = {
     PluginSettingTab: class {},
     Setting: class {},
     Modal: class {},
-    Menu: class { addItem() { return this; } addSeparator() {} },
+    Menu: class {
+        constructor() { this.titles = []; obsidian.lastMenu = this; }
+        addItem(fn) {
+            const self = this;
+            const item = {
+                setTitle(x) {
+                    self.titles.push(x);
+                    this.title = x;
+                    return this;
+                },
+                setIcon() { return this; },
+                onClick(f) { this.click = f; return this; },
+            };
+            fn(item);
+            (this.items = this.items || []).push(item);
+            return this;
+        }
+        addSeparator() {}
+        showAtMouseEvent() { this.shown = 'mouse'; }
+        showAtPosition() { this.shown = 'position'; }
+    },
     Component: class { load() {} unload() {} },
     MarkdownRenderer: {
         async render(app, md, el) { el.textContent = md; },
@@ -237,4 +257,4 @@ Module._load = function (req, ...a) {
     return orig.call(this, req, ...a);
 };
 
-module.exports = { makeApp, notices, TFile, window: w };
+module.exports = { makeApp, notices, TFile, window: w, obsidian };
