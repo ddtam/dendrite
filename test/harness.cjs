@@ -11,6 +11,7 @@ const w = dom.window;
 global.window = w;
 global.document = w.document;
 global.HTMLElement = w.HTMLElement;
+global.Event = w.Event;
 
 const P = w.HTMLElement.prototype;
 function make(tag, o = {}, parent) {
@@ -128,13 +129,21 @@ function makeApp() {
         getFileCache(f) {
             const t = text.get(f.path) || '';
             const m = /^---\n([\s\S]*?)\n---/.exec(t);
-            if (!m) return {};
+            const body = m ? t.slice(m[0].length) : t;
+            const firstLine = body.split('\n').find((l) => l.trim()) || '';
+            const sections = firstLine ? [{ type:
+                /^#{1,6}\s/.test(firstLine) ? 'heading' : 'paragraph' }] : [];
+            if (!m) return { sections };
             const fm = {};
             const lines = m[1].split('\n');
             for (let i = 0; i < lines.length; i++) {
                 const kv = /^(\w+):\s*(.*)$/.exec(lines[i]);
                 if (!kv) continue;
-                if (kv[2]) fm[kv[1]] = kv[2];
+                if (kv[2]) {
+                    const v = kv[2];
+                    fm[kv[1]] = v === 'true' ? true : v === 'false' ? false :
+                        (/^\d+(\.\d+)?$/.test(v) ? Number(v) : v);
+                }
                 else {
                     fm[kv[1]] = [];
                     while (/^\s+-\s/.test(lines[i + 1] || '')) {
@@ -142,7 +151,7 @@ function makeApp() {
                     }
                 }
             }
-            return { frontmatter: fm };
+            return { frontmatter: fm, sections };
         },
         getFirstLinkpathDest(link) {
             for (const f of files.values()) {
@@ -155,6 +164,22 @@ function makeApp() {
     const app = {
         vault, metadataCache, scope: {},
         fileManager: {
+            async processFrontMatter(f, fn) {
+                const t = text.get(f.path);
+                const m = /^---\n[\s\S]*?\n---\n?/.exec(t);
+                const fm = metadataCache.getFileCache(f).frontmatter || {};
+                fn(fm);
+                const lines = [];
+                for (const [k, v] of Object.entries(fm)) {
+                    if (Array.isArray(v)) {
+                        lines.push(k + ':');
+                        for (const x of v) lines.push('  - ' + x);
+                    } else lines.push(`${k}: ${v}`);
+                }
+                const head = lines.length ?
+                    '---\n' + lines.join('\n') + '\n---\n' : '';
+                await vault.modify(f, head + (m ? t.slice(m[0].length) : t));
+            },
             async trashFile(f) {
                 files.delete(f.path);
                 text.delete(f.path);

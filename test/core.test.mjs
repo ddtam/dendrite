@@ -158,3 +158,84 @@ test('frontmatter is kept verbatim and never read as body', () => {
                      { fm: '---\naliases:\n  - x\n---\n', body: 'Body\n' });
     assert.deepEqual(c.splitFrontmatter('No fm'), { fm: '', body: 'No fm' });
 });
+
+const ed = require('../src/textedit.js');
+const apply = (t, r) => t.slice(0, r.start) + r.text + t.slice(r.end);
+
+test('bold wraps the selection and unwraps it again', () => {
+    const r = ed.wrap('a word b', 2, 6, '**');
+    const t = apply('a word b', r);
+    assert.equal(t, 'a **word** b');
+    assert.equal(t.slice(r.selStart, r.selEnd), 'word');
+    const back = ed.wrap(t, r.selStart, r.selEnd, '**');
+    assert.equal(apply(t, back), 'a word b');
+});
+
+test('tab indents and shift-tab outdents every selected line', () => {
+    const t = '- a\n- b\nc';
+    const r = ed.shiftLines(t, 0, 6, false);
+    const t2 = apply(t, r);
+    assert.equal(t2, '    - a\n    - b\nc');
+    assert.equal(apply(t2, ed.shiftLines(t2, r.selStart, r.selEnd, true)),
+                 t);
+    assert.equal(apply('\t- x', ed.shiftLines('\t- x', 1, 1, true)), '- x');
+});
+
+test('enter continues a list, numbers it, and ends it on an empty item',
+     () => {
+    const t = '- first';
+    const r = ed.enter(t, t.length, t.length);
+    assert.equal(apply(t, r), '- first\n- ');
+    const n = '    3. third';
+    assert.equal(apply(n, ed.enter(n, n.length, n.length)),
+                 '    3. third\n    4. ');
+    const k = '- [x] done';
+    assert.equal(apply(k, ed.enter(k, k.length, k.length)),
+                 '- [x] done\n- [ ] ');
+    const empty = '- a\n- ';
+    assert.equal(apply(empty, ed.enter(empty, empty.length, empty.length)),
+                 '- a\n');
+    assert.equal(ed.enter('plain', 5, 5), null);
+});
+
+test('limits parse in words, characters and pages', () => {
+    assert.deepEqual(c.parseLimit('500 words'),
+                     { amount: 500, unit: 'words' });
+    assert.deepEqual(c.parseLimit('2000 chars'),
+                     { amount: 2000, unit: 'characters' });
+    assert.deepEqual(c.parseLimit('1 page'), { amount: 1, unit: 'pages' });
+    assert.equal(c.parseLimit('lots'), null);
+    assert.equal(c.parseLimit(''), null);
+    assert.equal(c.formatLimit({ amount: 1, unit: 'pages' }), '1 page');
+});
+
+test('counts leave out markup, link targets and comments', () => {
+    const md = '# Aims\n\n- The **method** is [[Note|robust]] ' +
+        '[@smith2020] %% not this %%here.';
+    const n = c.countText(md, true);
+    assert.equal(n.words, 7);
+    assert.equal(n.chars, 'Aims The method is robust cite here.'.length);
+    assert.equal(c.countText(md, false).chars,
+                 'AimsThemethodisrobustcitehere.'.length);
+    assert.equal(c.measure({ words: 750, chars: 0 }, 'pages', 500), 1.5);
+});
+
+test('sections are numbered by position and renumber when moved', () => {
+    const { root } = c.parseIndex(c.splitFrontmatter(INDEX).body);
+    const heads = new Set(['R01-aaaaa', 'R01-bbbbb', 'R01-eeeee']);
+    let nums = c.sectionNumbers(root.children, (id) => heads.has(id));
+    assert.equal(nums.get('R01-aaaaa'), '1.');
+    assert.equal(nums.get('R01-bbbbb'), '1.1');
+    assert.equal(nums.get('R01-eeeee'), '2.');
+    assert.equal(nums.has('R01-ccccc'), false);
+    c.moveWithin(root.children[1], -1);
+    nums = c.sectionNumbers(root.children, (id) => heads.has(id));
+    assert.equal(nums.get('R01-eeeee'), '1.');
+    assert.equal(nums.get('R01-bbbbb'), '2.1');
+    const bodies = { 'R01-eeeee': '# Significance', 'R01-aaaaa': '# Aims',
+                     'R01-bbbbb': '# Aim 1\nplan', 'R01-ccccc': 'Text.',
+                     'R01-ddddd': '' };
+    assert.equal(c.exportMarkdown(root.children, (id) => bodies[id], 1, nums),
+                 '# 1. Significance\n\n# 2. Aims\n\n## 2.1 Aim 1\n\n' +
+                 'Text.\n');
+});

@@ -267,12 +267,15 @@ function columns(root) {
  * exported whole, its own heading line, if any, re-levelled the same way.
  * Comments are dropped everywhere. `bodyOf(id)` returns a card's body.
  */
-function exportMarkdown(nodes, bodyOf, headingTop) {
+function exportMarkdown(nodes, bodyOf, headingTop, numbers) {
     const top = Math.max(1, Math.min(6, headingTop || 1));
     const blocks = [];
+    let current = null;
     const heading = (text, depth) => '#'.repeat(Math.min(6, top + depth)) +
-        ' ' + text;
+        ' ' + (numbers && numbers.has(current) ?
+            numbers.get(current) + ' ' : '') + text;
     const walk = (node, depth) => {
+        current = node.id;
         const body = stripComments(bodyOf(node.id) || '').trim();
         const lines = body ? body.split('\n') : [];
         const h = lines.length ? HEADING.exec(lines[0].trim()) : null;
@@ -291,7 +294,88 @@ function exportMarkdown(nodes, bodyOf, headingTop) {
     return blocks.join('\n\n') + (blocks.length ? '\n' : '');
 }
 
+/**
+ * Section numbers by position, as LaTeX numbers them: every card whose
+ * text opens with a heading is numbered among its siblings that do, so
+ * moving a section renumbers it. `hasHeading(id)` says which cards do.
+ * Returns id -> `1.`, `1.2` and so on.
+ */
+function sectionNumbers(roots, hasHeading) {
+    const out = new Map();
+    const walk = (nodes, prefix) => {
+        let i = 0;
+        for (const n of nodes) {
+            if (hasHeading(n.id)) {
+                i += 1;
+                const num = prefix ? `${prefix}.${i}` : String(i);
+                out.set(n.id, prefix ? num : num + '.');
+                walk(n.children, num);
+            } else {
+                walk(n.children, prefix);
+            }
+        }
+    };
+    walk(roots, '');
+    return out;
+}
+
+// ---- limits and counts ---------------------------------------------------
+
+const LIMIT = /^\s*(\d+(?:\.\d+)?)\s*(words?|characters?|chars?|pages?)\s*$/i;
+
+/** `500 words`, `2000 characters`, `1 page`; null if unset or unreadable. */
+function parseLimit(value) {
+    if (value === null || value === undefined || value === '') return null;
+    const m = LIMIT.exec(String(value));
+    if (!m) return null;
+    const u = m[2].toLowerCase();
+    const unit = u.startsWith('w') ? 'words' :
+        (u.startsWith('p') ? 'pages' : 'characters');
+    return { amount: Number(m[1]), unit };
+}
+
+function formatLimit(limit) {
+    if (!limit) return '';
+    const one = limit.amount === 1;
+    const unit = limit.unit === 'pages' ? (one ? 'page' : 'pages') :
+        limit.unit === 'words' ? (one ? 'word' : 'words') :
+            (one ? 'character' : 'characters');
+    return `${limit.amount} ${unit}`;
+}
+
+/**
+ * Words and characters in exported markdown, counting what a reader of
+ * the output would see: markup, link targets and list markers are left
+ * out, and a citation key counts as one word, since what it becomes
+ * depends on the citation style.
+ */
+function countText(markdown, countSpaces) {
+    const plain = stripComments(markdown)
+        .replace(/!\[\[[^\]]*\]\]/g, ' ')
+        .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+        .replace(/\[\[([^\]|]*\|)?([^\]]*)\]\]/g, '$2')
+        .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+        .replace(/\[(@[^\]]+)\]/g, 'cite')
+        .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+        .replace(/^\s*(?:[-*+]|\d+[.)])\s+(?:\[.\]\s+)?/gm, '')
+        .replace(/^\s*>\s?/gm, '')
+        .replace(/[*_`~=]+/g, '');
+    const words = (plain.match(/\S+/g) || []).length;
+    const collapsed = plain.replace(/\s+/g, ' ').trim();
+    const chars = countSpaces ? collapsed.length :
+        collapsed.replace(/ /g, '').length;
+    return { words, chars };
+}
+
+/** A count in a limit's unit; pages are words over a words-per-page. */
+function measure(count, unit, wordsPerPage) {
+    if (unit === 'words') return count.words;
+    if (unit === 'characters') return count.chars;
+    return count.words / (wordsPerPage || 500);
+}
+
 module.exports = {
+    parseLimit, formatLimit, countText, measure, sectionNumbers,
     INDENT, splitFrontmatter, parseIndex, serialiseTree, writeIndexText,
     deriveLabel, stripComments, validPrefix, newId, makeNode, makeRoot,
     insertSibling, appendChild, moveWithin, indent, outdent, remove,

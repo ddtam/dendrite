@@ -222,3 +222,31 @@
 .is-mobile .dendrite {
     --dendrite-gap: 8px;
 }
+
+.dendrite-num {
+    font-size: var(--font-ui-smaller);
+    font-weight: var(--font-semibold);
+    color: var(--text-accent);
+    margin-bottom: 2px;
+}
+
+.dendrite-count,
+.dendrite-total {
+    font-size: var(--font-ui-smaller);
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.dendrite-count {
+    margin-top: 6px;
+}
+
+.dendrite-total {
+    margin-left: 12px;
+}
+
+.dendrite-count.is-over,
+.dendrite-total .is-over,
+.dendrite-over-allocated {
+    color: var(--text-error);
+}

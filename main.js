@@ -197,11 +197,13 @@ var require_core = __commonJS({
       walk(root, 0);
       return cols;
     }
-    function exportMarkdown(nodes, bodyOf, headingTop) {
+    function exportMarkdown(nodes, bodyOf, headingTop, numbers) {
       const top = Math.max(1, Math.min(6, headingTop || 1));
       const blocks = [];
-      const heading = (text, depth) => "#".repeat(Math.min(6, top + depth)) + " " + text;
+      let current = null;
+      const heading = (text, depth) => "#".repeat(Math.min(6, top + depth)) + " " + (numbers && numbers.has(current) ? numbers.get(current) + " " : "") + text;
       const walk = (node, depth) => {
+        current = node.id;
         const body = stripComments(bodyOf(node.id) || "").trim();
         const lines = body ? body.split("\n") : [];
         const h = lines.length ? HEADING.exec(lines[0].trim()) : null;
@@ -219,7 +221,57 @@ var require_core = __commonJS({
       for (const n of nodes) walk(n, 0);
       return blocks.join("\n\n") + (blocks.length ? "\n" : "");
     }
+    function sectionNumbers(roots, hasHeading) {
+      const out = /* @__PURE__ */ new Map();
+      const walk = (nodes, prefix) => {
+        let i = 0;
+        for (const n of nodes) {
+          if (hasHeading(n.id)) {
+            i += 1;
+            const num = prefix ? `${prefix}.${i}` : String(i);
+            out.set(n.id, prefix ? num : num + ".");
+            walk(n.children, num);
+          } else {
+            walk(n.children, prefix);
+          }
+        }
+      };
+      walk(roots, "");
+      return out;
+    }
+    var LIMIT = /^\s*(\d+(?:\.\d+)?)\s*(words?|characters?|chars?|pages?)\s*$/i;
+    function parseLimit(value) {
+      if (value === null || value === void 0 || value === "") return null;
+      const m = LIMIT.exec(String(value));
+      if (!m) return null;
+      const u = m[2].toLowerCase();
+      const unit = u.startsWith("w") ? "words" : u.startsWith("p") ? "pages" : "characters";
+      return { amount: Number(m[1]), unit };
+    }
+    function formatLimit(limit) {
+      if (!limit) return "";
+      const one = limit.amount === 1;
+      const unit = limit.unit === "pages" ? one ? "page" : "pages" : limit.unit === "words" ? one ? "word" : "words" : one ? "character" : "characters";
+      return `${limit.amount} ${unit}`;
+    }
+    function countText(markdown, countSpaces) {
+      const plain = stripComments(markdown).replace(/!\[\[[^\]]*\]\]/g, " ").replace(/!\[[^\]]*\]\([^)]*\)/g, " ").replace(/\[\[([^\]|]*\|)?([^\]]*)\]\]/g, "$2").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/\[(@[^\]]+)\]/g, "cite").replace(/^\s{0,3}#{1,6}\s+/gm, "").replace(/^\s*(?:[-*+]|\d+[.)])\s+(?:\[.\]\s+)?/gm, "").replace(/^\s*>\s?/gm, "").replace(/[*_`~=]+/g, "");
+      const words = (plain.match(/\S+/g) || []).length;
+      const collapsed = plain.replace(/\s+/g, " ").trim();
+      const chars = countSpaces ? collapsed.length : collapsed.replace(/ /g, "").length;
+      return { words, chars };
+    }
+    function measure(count, unit, wordsPerPage) {
+      if (unit === "words") return count.words;
+      if (unit === "characters") return count.chars;
+      return count.words / (wordsPerPage || 500);
+    }
     module2.exports = {
+      parseLimit,
+      formatLimit,
+      countText,
+      measure,
+      sectionNumbers,
       INDENT,
       splitFrontmatter,
       parseIndex,
@@ -246,6 +298,98 @@ var require_core = __commonJS({
   }
 });
 
+// src/textedit.js
+var require_textedit = __commonJS({
+  "src/textedit.js"(exports2, module2) {
+    "use strict";
+    var INDENT = "    ";
+    var LIST = /^(\s*)([-*+]|(\d+)([.)]))(\s+)(\[.\]\s+)?/;
+    function lineStart(text, i) {
+      return text.lastIndexOf("\n", i - 1) + 1;
+    }
+    function lineEnd(text, i) {
+      const j = text.indexOf("\n", i);
+      return j < 0 ? text.length : j;
+    }
+    function wrap(text, s, e, mark) {
+      const sel = text.slice(s, e);
+      const n = mark.length;
+      if (text.slice(s - n, s) === mark && text.slice(e, e + n) === mark) {
+        return {
+          start: s - n,
+          end: e + n,
+          text: sel,
+          selStart: s - n,
+          selEnd: e - n
+        };
+      }
+      return {
+        start: s,
+        end: e,
+        text: mark + sel + mark,
+        selStart: s + n,
+        selEnd: e + n
+      };
+    }
+    function shiftLines(text, s, e, outdent) {
+      const a = lineStart(text, s);
+      const b = lineEnd(text, e > s && text[e - 1] === "\n" ? e - 1 : e);
+      const lines = text.slice(a, b).split("\n");
+      let firstDelta = 0;
+      let total = 0;
+      const out = lines.map((line, i) => {
+        let delta;
+        let next;
+        if (outdent) {
+          const m = /^( {1,4}|\t)/.exec(line);
+          delta = m ? -m[0].length : 0;
+          next = line.slice(-delta);
+        } else {
+          delta = INDENT.length;
+          next = INDENT + line;
+        }
+        if (i === 0) firstDelta = delta;
+        total += delta;
+        return next;
+      });
+      return {
+        start: a,
+        end: b,
+        text: out.join("\n"),
+        selStart: Math.max(a, s + firstDelta),
+        selEnd: Math.max(a, e + total)
+      };
+    }
+    function enter(text, s, e) {
+      if (s !== e) return null;
+      const a = lineStart(text, s);
+      const line = text.slice(a, lineEnd(text, s));
+      const m = LIST.exec(line);
+      if (!m) return null;
+      if (line.trim() === m[0].trim()) {
+        return {
+          start: a,
+          end: a + line.length,
+          text: "",
+          selStart: a,
+          selEnd: a
+        };
+      }
+      const marker = m[3] ? String(Number(m[3]) + 1) + m[4] : m[2];
+      const task = m[6] ? "[ ] " : "";
+      const insert = "\n" + m[1] + marker + m[5] + task;
+      return {
+        start: s,
+        end: s,
+        text: insert,
+        selStart: s + insert.length,
+        selEnd: s + insert.length
+      };
+    }
+    module2.exports = { wrap, shiftLines, enter };
+  }
+});
+
 // src/main.js
 var {
   ItemView,
@@ -265,6 +409,7 @@ var {
   Keymap
 } = require("obsidian");
 var core = require_core();
+var textedit = require_textedit();
 var VIEW = "dendrite-view";
 var DEFAULTS = {
   writingFolder: "Writing",
@@ -459,6 +604,8 @@ var DendriteView = class extends ItemView {
       col.createDiv({ cls: "dendrite-spacer" });
     });
     this.applyActive(false);
+    this.updateNumbers();
+    this.updateCounts();
   }
   renderBar(el) {
     const bar = el.createDiv({ cls: "dendrite-bar" });
@@ -488,6 +635,13 @@ var DendriteView = class extends ItemView {
       "Open the index note as markdown",
       () => this.plugin.openAsMarkdown(this.file)
     );
+    btn(
+      "settings",
+      "Settings",
+      "This manuscript's settings",
+      () => new ManuscriptModal(this).open()
+    );
+    this.totalEl = bar.createDiv({ cls: "dendrite-total" });
     const unlinked = this.unlinkedCards();
     if (unlinked.length) {
       const warn = bar.createDiv({ cls: "dendrite-warn" });
@@ -659,6 +813,11 @@ var DendriteView = class extends ItemView {
       "New child card (Ctrl+\u2192)",
       () => this.insert("child")
     );
+    btn(
+      "sliders-horizontal",
+      "Card properties: label and limit",
+      () => new CardModal(this, this.active).open()
+    );
     btn("more-horizontal", "More", () => this.cardMenu(t));
     this.toolbar = t;
   }
@@ -758,10 +917,14 @@ var DendriteView = class extends ItemView {
       s.register([], key, nav(dir));
     }
     s.register([], "Enter", () => {
-      if (this.editing) return true;
+      if (this.editing) return this.editKey("enter");
       if (this.active) this.startEdit(this.active);
       return false;
     });
+    s.register(["Mod"], "b", () => this.editKey("bold"));
+    s.register(["Mod"], "i", () => this.editKey("italic"));
+    s.register([], "Tab", () => this.editKey("indent"));
+    s.register(["Shift"], "Tab", () => this.editKey("outdent"));
     s.register([], "Escape", () => {
       if (!this.editing) return true;
       this.endEdit();
@@ -809,6 +972,31 @@ var DendriteView = class extends ItemView {
     });
   }
   // ---- editing ---------------------------------------------------------
+  /** Run a text command in the editor; true lets the key through. */
+  editKey(cmd) {
+    const ed = this.editing;
+    if (!ed) return cmd !== "indent" && cmd !== "outdent";
+    const ta = ed.ta;
+    const v = ta.value;
+    const s = ta.selectionStart;
+    const e = ta.selectionEnd;
+    const r = cmd === "bold" ? textedit.wrap(v, s, e, "**") : cmd === "italic" ? textedit.wrap(v, s, e, "*") : cmd === "indent" ? textedit.shiftLines(v, s, e, false) : cmd === "outdent" ? textedit.shiftLines(v, s, e, true) : textedit.enter(v, s, e);
+    if (!r) return true;
+    ta.focus();
+    ta.setSelectionRange(r.start, r.end);
+    let done = false;
+    try {
+      done = r.text ? document.execCommand("insertText", false, r.text) : r.start === r.end || document.execCommand("delete");
+    } catch (err) {
+      done = false;
+    }
+    if (!done) {
+      ta.setRangeText(r.text, r.start, r.end, "end");
+      ta.dispatchEvent(new Event("input"));
+    }
+    ta.setSelectionRange(r.selStart, r.selEnd);
+    return false;
+  }
   async startEdit(id) {
     if (this.editing) {
       if (this.editing.id === id) return;
@@ -840,6 +1028,7 @@ var DendriteView = class extends ItemView {
       ed.dirty = true;
       fit();
       this.centre(false);
+      this.scheduleCounts();
       clearTimeout(ed.timer);
       ed.timer = setTimeout(
         () => this.save(ed),
@@ -1073,7 +1262,15 @@ var DendriteView = class extends ItemView {
     }
   }
   async onMetadata(f) {
-    if (!(f instanceof TFile) || !this.byId.has(f.basename)) return;
+    if (!(f instanceof TFile)) return;
+    if (f === this.file) {
+      this.updateNumbers();
+      this.updateCounts();
+      return;
+    }
+    if (!this.byId.has(f.basename)) return;
+    this.updateNumbers();
+    this.scheduleCounts();
     if (this.editing && this.editing.id === f.basename) return;
     const body = core.splitFrontmatter(
       await this.app.vault.cachedRead(f)
@@ -1090,6 +1287,143 @@ var DendriteView = class extends ItemView {
     if (this.active === old) this.active = node.id;
     this.invalidate(old);
   }
+  // ---- manuscript settings, numbering and counts ------------------------
+  /** The manuscript's settings, from its index note's properties. */
+  manuscript() {
+    const fm = this.file && this.app.metadataCache.getFileCache(this.file)?.frontmatter || {};
+    const top = Number(fm.dendrite_heading_top);
+    const wpp = Number(fm.dendrite_words_per_page);
+    return {
+      prefix: this.prefix(),
+      limit: core.parseLimit(fm.dendrite_limit),
+      countSpaces: fm.dendrite_count_spaces !== false,
+      wordsPerPage: wpp > 0 ? wpp : 500,
+      headingTop: top >= 1 && top <= 6 ? top : this.plugin.settings.headingTop,
+      number: fm.dendrite_number_sections === true
+    };
+  }
+  cardProps(id) {
+    const f = this.cardFile(id);
+    return f && this.app.metadataCache.getFileCache(f)?.frontmatter || {};
+  }
+  /** Whether a card's text opens with a heading, from Obsidian's cache. */
+  hasHeading(id) {
+    if (this.editing && this.editing.id === id) {
+      return /^\s*#{1,6}\s/.test(this.editing.ta.value);
+    }
+    const f = this.cardFile(id);
+    const sections = f && this.app.metadataCache.getFileCache(f)?.sections;
+    const first = (sections || []).find((s) => s.type !== "yaml");
+    return !!first && first.type === "heading";
+  }
+  numbers() {
+    if (!this.manuscript().number) return /* @__PURE__ */ new Map();
+    return core.sectionNumbers(
+      this.root.children,
+      (id) => this.hasHeading(id)
+    );
+  }
+  /** Show each section card's number, updated in place. */
+  updateNumbers() {
+    const nums = this.numbers();
+    for (const [id, card] of this.cardEls) {
+      let badge = card.querySelector(":scope > .dendrite-num");
+      const num = nums.get(id);
+      if (!num) {
+        if (badge) badge.remove();
+        continue;
+      }
+      if (!badge) {
+        badge = createDiv({ cls: "dendrite-num" });
+        card.prepend(badge);
+      }
+      badge.setText(num);
+    }
+  }
+  scheduleCounts() {
+    clearTimeout(this.countTimer);
+    this.countTimer = setTimeout(() => this.updateCounts(), 400);
+  }
+  /**
+   * Count what each limited card's branch would export, and the whole
+   * manuscript, and show them against their limits. Card text is read
+   * only when some limit is set, so a manuscript without limits pays
+   * nothing for this.
+   */
+  async updateCounts() {
+    if (!this.file || !this.board) return;
+    const ms = this.manuscript();
+    const limited = core.allNodes(this.root).filter(
+      (n) => core.parseLimit(this.cardProps(n.id).dendrite_limit)
+    );
+    for (const card of this.cardEls.values()) {
+      const old = card.querySelector(".dendrite-count");
+      if (old) old.remove();
+    }
+    if (!ms.limit && !limited.length) {
+      if (this.totalEl) this.totalEl.empty();
+      return;
+    }
+    const bodies = await this.loadBodies();
+    const bodyOf = (id) => this.editing && this.editing.id === id ? this.editing.ta.value : bodies.get(id);
+    const count = (nodes) => core.countText(
+      core.exportMarkdown(nodes, bodyOf, 1),
+      ms.countSpaces
+    );
+    const show = (el, n, limit) => {
+      const have = core.measure(n, limit.unit, ms.wordsPerPage);
+      const over = have > limit.amount;
+      const fmt = limit.unit === "pages" ? `~${have.toFixed(1)} / ${core.formatLimit(limit)} (estimate)` : `${Math.round(have).toLocaleString()} / ` + core.formatLimit(limit);
+      el.setText(fmt);
+      el.toggleClass("is-over", over);
+    };
+    for (const n of limited) {
+      const card = this.cardEls.get(n.id);
+      if (!card) continue;
+      const el = card.createDiv({ cls: "dendrite-count" });
+      show(el, count([n]), core.parseLimit(
+        this.cardProps(n.id).dendrite_limit
+      ));
+    }
+    if (!this.totalEl) return;
+    this.totalEl.empty();
+    const total = count(this.root.children);
+    if (!ms.limit) {
+      this.totalEl.setText(`${total.words.toLocaleString()} words`);
+      return;
+    }
+    show(this.totalEl.createSpan(), total, ms.limit);
+    const outer = limited.filter((n) => {
+      for (let p = n.parent; p && p.id; p = p.parent) {
+        if (limited.includes(p)) return false;
+      }
+      return true;
+    }).map((n) => core.parseLimit(this.cardProps(n.id).dendrite_limit)).filter((l) => l.unit === ms.limit.unit);
+    const allocated = outer.reduce((s, l) => s + l.amount, 0);
+    if (allocated > ms.limit.amount) {
+      this.totalEl.createSpan({
+        cls: "dendrite-over-allocated",
+        text: ` \xB7 sections allocated ${allocated} of ` + core.formatLimit(ms.limit)
+      });
+    }
+  }
+  async loadBodies() {
+    this.bodies = this.bodies || /* @__PURE__ */ new Map();
+    for (const n of core.allNodes(this.root)) {
+      const f = this.cardFile(n.id);
+      if (!f) continue;
+      const had = this.bodies.get(n.id);
+      if (had && had.mtime === f.stat.mtime) continue;
+      const text = await this.app.vault.cachedRead(f);
+      this.bodies.set(n.id, {
+        mtime: f.stat.mtime,
+        body: core.splitFrontmatter(text).body
+      });
+    }
+    const out = /* @__PURE__ */ new Map();
+    for (const [id, b] of this.bodies) out.set(id, b.body);
+    return out;
+  }
   // ---- export ----------------------------------------------------------
   async exportTo(node) {
     await this.flush();
@@ -1104,10 +1438,12 @@ var DendriteView = class extends ItemView {
         ).body);
       }
     }
+    const ms = this.manuscript();
     const text = core.exportMarkdown(
       scope,
       (id) => bodies.get(id),
-      this.plugin.settings.headingTop
+      ms.headingTop,
+      this.numbers()
     );
     const dir = normalizePath(
       (this.file.parent.path === "/" ? "" : this.file.parent.path + "/") + "exports"
@@ -1129,6 +1465,111 @@ var DendriteView = class extends ItemView {
     new Notice(`Dendrite: exported to ${path}`);
   }
 };
+function limitSetting(container, name, desc, current, onChange) {
+  let amount = current ? String(current.amount) : "";
+  let unit = current ? current.unit : "words";
+  const emit = () => {
+    const n = Number(amount);
+    onChange(amount.trim() && n > 0 ? core.formatLimit({ amount: n, unit }) : null);
+  };
+  new Setting(container).setName(name).setDesc(desc).addText((t) => t.setPlaceholder("none").setValue(amount).onChange((v) => {
+    amount = v;
+    emit();
+  })).addDropdown((d) => d.addOption("words", "words").addOption("characters", "characters").addOption("pages", "pages").setValue(unit).onChange((v) => {
+    unit = v;
+    emit();
+  }));
+}
+var ManuscriptModal = class extends Modal {
+  constructor(view) {
+    super(view.app);
+    this.view = view;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    const view = this.view;
+    const ms = view.manuscript();
+    const draft = {};
+    this.titleEl.setText(`${view.file.basename}: settings`);
+    new Setting(contentEl).setName("Prefix").setDesc("Starts every card ID in this manuscript. Fixed once cards exist, since their file names carry it.").addText((t) => t.setValue(ms.prefix || "").setDisabled(true));
+    limitSetting(
+      contentEl,
+      "Total limit",
+      "For the whole manuscript, shown in the top bar.",
+      ms.limit,
+      (v) => {
+        draft.dendrite_limit = v;
+      }
+    );
+    new Setting(contentEl).setName("Count spaces in characters").setDesc("Funding portals differ; check the call.").addToggle((tg) => tg.setValue(ms.countSpaces).onChange((v) => {
+      draft.dendrite_count_spaces = v;
+    }));
+    new Setting(contentEl).setName("Words per page").setDesc("Only for page estimates while writing. The real count depends on the final layout.").addText((t) => t.setValue(String(ms.wordsPerPage)).onChange((v) => {
+      draft.dendrite_words_per_page = Number(v) > 0 ? Number(v) : null;
+    }));
+    new Setting(contentEl).setName("Number sections by position").setDesc("Write headings without numbers; sections are numbered from where they sit, and renumber when moved.").addToggle((tg) => tg.setValue(ms.number).onChange((v) => {
+      draft.dendrite_number_sections = v;
+    }));
+    new Setting(contentEl).setName("Top section heading level").setDesc("Export writes top-level sections at this level.").addDropdown((d) => {
+      for (let i = 1; i <= 4; i++) d.addOption(String(i), "H" + i);
+      d.setValue(String(ms.headingTop)).onChange((v) => {
+        draft.dendrite_heading_top = Number(v);
+      });
+    });
+    new Setting(contentEl).addButton((b) => b.setButtonText("Save").setCta().onClick(async () => {
+      await writeProps(view.app, view.file, draft);
+      this.close();
+    }));
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
+var CardModal = class extends Modal {
+  constructor(view, id) {
+    super(view.app);
+    this.view = view;
+    this.id = id;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    const view = this.view;
+    const fm = view.cardProps(this.id);
+    const aliases = Array.isArray(fm.aliases) ? fm.aliases : fm.aliases ? [fm.aliases] : [];
+    const draft = {};
+    this.titleEl.setText("Card properties");
+    new Setting(contentEl).setName("Label").setDesc("Shown in the index when the card does not open with a heading. Stored as the card's first alias.").addText((t) => t.setValue(aliases[0] || "").onChange((v) => {
+      const rest = aliases.slice(1);
+      draft.aliases = v.trim() ? [v.trim(), ...rest] : rest.length ? rest : null;
+    }));
+    limitSetting(
+      contentEl,
+      "Limit",
+      "A target for this card and everything under it, counted from what export would write.",
+      core.parseLimit(fm.dendrite_limit),
+      (v) => {
+        draft.dendrite_limit = v;
+      }
+    );
+    new Setting(contentEl).addButton((b) => b.setButtonText("Save").setCta().onClick(async () => {
+      const f = view.cardFile(this.id);
+      if (f) await writeProps(view.app, f, draft);
+      this.close();
+    }));
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
+async function writeProps(app, file, draft) {
+  if (!Object.keys(draft).length) return;
+  await app.fileManager.processFrontMatter(file, (fm) => {
+    for (const [k, v] of Object.entries(draft)) {
+      if (v === null || v === void 0) delete fm[k];
+      else fm[k] = v;
+    }
+  });
+}
 var NewManuscriptModal = class extends Modal {
   constructor(plugin) {
     super(plugin.app);

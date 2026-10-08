@@ -20,6 +20,7 @@ const {
     normalizePath, Keymap,
 } = require('obsidian');
 const core = require('./core.js');
+const textedit = require('./textedit.js');
 
 const VIEW = 'dendrite-view';
 const DEFAULTS = {
@@ -216,6 +217,8 @@ class DendriteView extends ItemView {
             col.createDiv({ cls: 'dendrite-spacer' });
         });
         this.applyActive(false);
+        this.updateNumbers();
+        this.updateCounts();
     }
 
     renderBar(el) {
@@ -236,6 +239,9 @@ class DendriteView extends ItemView {
             () => this.doUndo());
         btn('file-text', 'Index', 'Open the index note as markdown',
             () => this.plugin.openAsMarkdown(this.file));
+        btn('settings', 'Settings', 'This manuscript\'s settings',
+            () => new ManuscriptModal(this).open());
+        this.totalEl = bar.createDiv({ cls: 'dendrite-total' });
         const unlinked = this.unlinkedCards();
         if (unlinked.length) {
             const warn = bar.createDiv({ cls: 'dendrite-warn' });
@@ -402,6 +408,8 @@ class DendriteView extends ItemView {
             () => this.insert('below'));
         btn('corner-down-right', 'New child card (Ctrl+→)',
             () => this.insert('child'));
+        btn('sliders-horizontal', 'Card properties: label and limit',
+            () => new CardModal(this, this.active).open());
         btn('more-horizontal', 'More', () => this.cardMenu(t));
         this.toolbar = t;
     }
@@ -493,10 +501,17 @@ class DendriteView extends ItemView {
             s.register([], key, nav(dir));
         }
         s.register([], 'Enter', () => {
-            if (this.editing) return true;
+            if (this.editing) return this.editKey('enter');
             if (this.active) this.startEdit(this.active);
             return false;
         });
+        // Text commands inside the editor. Without these, the keys reach
+        // Obsidian's app scope, which handles them for its own editor or
+        // moves focus out of the pane.
+        s.register(['Mod'], 'b', () => this.editKey('bold'));
+        s.register(['Mod'], 'i', () => this.editKey('italic'));
+        s.register([], 'Tab', () => this.editKey('indent'));
+        s.register(['Shift'], 'Tab', () => this.editKey('outdent'));
         s.register([], 'Escape', () => {
             if (!this.editing) return true;
             this.endEdit();
@@ -539,6 +554,42 @@ class DendriteView extends ItemView {
 
     // ---- editing ---------------------------------------------------------
 
+    /** Run a text command in the editor; true lets the key through. */
+    editKey(cmd) {
+        const ed = this.editing;
+        // Outside the editor, Tab is held so it cannot move focus out of
+        // the pane; every other key goes through.
+        if (!ed) return cmd !== 'indent' && cmd !== 'outdent';
+        const ta = ed.ta;
+        const v = ta.value;
+        const s = ta.selectionStart;
+        const e = ta.selectionEnd;
+        const r = cmd === 'bold' ? textedit.wrap(v, s, e, '**') :
+            cmd === 'italic' ? textedit.wrap(v, s, e, '*') :
+            cmd === 'indent' ? textedit.shiftLines(v, s, e, false) :
+            cmd === 'outdent' ? textedit.shiftLines(v, s, e, true) :
+            textedit.enter(v, s, e);
+        if (!r) return true;
+        ta.focus();
+        ta.setSelectionRange(r.start, r.end);
+        // insertText keeps the text area's undo history; setRangeText is
+        // the fallback where the command is unavailable.
+        let done = false;
+        try {
+            done = r.text ?
+                document.execCommand('insertText', false, r.text) :
+                (r.start === r.end || document.execCommand('delete'));
+        } catch (err) {
+            done = false;
+        }
+        if (!done) {
+            ta.setRangeText(r.text, r.start, r.end, 'end');
+            ta.dispatchEvent(new Event('input'));
+        }
+        ta.setSelectionRange(r.selStart, r.selEnd);
+        return false;
+    }
+
     async startEdit(id) {
         if (this.editing) {
             if (this.editing.id === id) return;
@@ -565,6 +616,7 @@ class DendriteView extends ItemView {
             fit();
             // A growing card stays centred while it is written in.
             this.centre(false);
+            this.scheduleCounts();
             clearTimeout(ed.timer);
             ed.timer = setTimeout(() => this.save(ed),
                                   this.plugin.settings.autosaveMs);
@@ -812,10 +864,21 @@ class DendriteView extends ItemView {
     }
 
     async onMetadata(f) {
+        if (!(f instanceof TFile)) return;
+        if (f === this.file) {
+            // The manuscript's settings changed: numbering and limits.
+            this.updateNumbers();
+            this.updateCounts();
+            return;
+        }
+        if (!this.byId.has(f.basename)) return;
+        // A heading added or removed changes the numbering, and a limit
+        // set in the card's properties changes what is counted.
+        this.updateNumbers();
+        this.scheduleCounts();
         // A label can come from aliases, which only the metadata cache
         // knows once parsed, so labels are synced here rather than on
         // modify.
-        if (!(f instanceof TFile) || !this.byId.has(f.basename)) return;
         if (this.editing && this.editing.id === f.basename) return;
         const body = core.splitFrontmatter(
             await this.app.vault.cachedRead(f)).body;
@@ -834,6 +897,156 @@ class DendriteView extends ItemView {
         this.invalidate(old);
     }
 
+    // ---- manuscript settings, numbering and counts ------------------------
+
+    /** The manuscript's settings, from its index note's properties. */
+    manuscript() {
+        const fm = (this.file &&
+            this.app.metadataCache.getFileCache(this.file)?.frontmatter) ||
+            {};
+        const top = Number(fm.dendrite_heading_top);
+        const wpp = Number(fm.dendrite_words_per_page);
+        return {
+            prefix: this.prefix(),
+            limit: core.parseLimit(fm.dendrite_limit),
+            countSpaces: fm.dendrite_count_spaces !== false,
+            wordsPerPage: wpp > 0 ? wpp : 500,
+            headingTop: top >= 1 && top <= 6 ? top :
+                this.plugin.settings.headingTop,
+            number: fm.dendrite_number_sections === true,
+        };
+    }
+
+    cardProps(id) {
+        const f = this.cardFile(id);
+        return (f && this.app.metadataCache.getFileCache(f)?.frontmatter) ||
+            {};
+    }
+
+    /** Whether a card's text opens with a heading, from Obsidian's cache. */
+    hasHeading(id) {
+        if (this.editing && this.editing.id === id) {
+            return /^\s*#{1,6}\s/.test(this.editing.ta.value);
+        }
+        const f = this.cardFile(id);
+        const sections = f && this.app.metadataCache.getFileCache(f)?.sections;
+        const first = (sections || []).find((s) => s.type !== 'yaml');
+        return !!first && first.type === 'heading';
+    }
+
+    numbers() {
+        if (!this.manuscript().number) return new Map();
+        return core.sectionNumbers(this.root.children,
+                                   (id) => this.hasHeading(id));
+    }
+
+    /** Show each section card's number, updated in place. */
+    updateNumbers() {
+        const nums = this.numbers();
+        for (const [id, card] of this.cardEls) {
+            let badge = card.querySelector(':scope > .dendrite-num');
+            const num = nums.get(id);
+            if (!num) {
+                if (badge) badge.remove();
+                continue;
+            }
+            if (!badge) {
+                badge = createDiv({ cls: 'dendrite-num' });
+                card.prepend(badge);
+            }
+            badge.setText(num);
+        }
+    }
+
+    scheduleCounts() {
+        clearTimeout(this.countTimer);
+        this.countTimer = setTimeout(() => this.updateCounts(), 400);
+    }
+
+    /**
+     * Count what each limited card's branch would export, and the whole
+     * manuscript, and show them against their limits. Card text is read
+     * only when some limit is set, so a manuscript without limits pays
+     * nothing for this.
+     */
+    async updateCounts() {
+        if (!this.file || !this.board) return;
+        const ms = this.manuscript();
+        const limited = core.allNodes(this.root).filter(
+            (n) => core.parseLimit(this.cardProps(n.id).dendrite_limit));
+        for (const card of this.cardEls.values()) {
+            const old = card.querySelector('.dendrite-count');
+            if (old) old.remove();
+        }
+        if (!ms.limit && !limited.length) {
+            if (this.totalEl) this.totalEl.empty();
+            return;
+        }
+        const bodies = await this.loadBodies();
+        const bodyOf = (id) => (this.editing && this.editing.id === id) ?
+            this.editing.ta.value : bodies.get(id);
+        const count = (nodes) => core.countText(
+            core.exportMarkdown(nodes, bodyOf, 1), ms.countSpaces);
+        const show = (el, n, limit) => {
+            const have = core.measure(n, limit.unit, ms.wordsPerPage);
+            const over = have > limit.amount;
+            const fmt = limit.unit === 'pages' ?
+                `~${have.toFixed(1)} / ${core.formatLimit(limit)} ` +
+                    '(estimate)' :
+                `${Math.round(have).toLocaleString()} / ` +
+                    core.formatLimit(limit);
+            el.setText(fmt);
+            el.toggleClass('is-over', over);
+        };
+        for (const n of limited) {
+            const card = this.cardEls.get(n.id);
+            if (!card) continue;
+            const el = card.createDiv({ cls: 'dendrite-count' });
+            show(el, count([n]), core.parseLimit(
+                this.cardProps(n.id).dendrite_limit));
+        }
+        if (!this.totalEl) return;
+        this.totalEl.empty();
+        const total = count(this.root.children);
+        if (!ms.limit) {
+            this.totalEl.setText(`${total.words.toLocaleString()} words`);
+            return;
+        }
+        show(this.totalEl.createSpan(), total, ms.limit);
+        // Allocations: the limits of the outermost limited cards, in the
+        // total's unit, against the total.
+        const outer = limited.filter((n) => {
+            for (let p = n.parent; p && p.id; p = p.parent) {
+                if (limited.includes(p)) return false;
+            }
+            return true;
+        }).map((n) => core.parseLimit(this.cardProps(n.id).dendrite_limit))
+            .filter((l) => l.unit === ms.limit.unit);
+        const allocated = outer.reduce((s, l) => s + l.amount, 0);
+        if (allocated > ms.limit.amount) {
+            this.totalEl.createSpan({
+                cls: 'dendrite-over-allocated',
+                text: ` · sections allocated ${allocated} of ` +
+                    core.formatLimit(ms.limit) });
+        }
+    }
+
+    async loadBodies() {
+        this.bodies = this.bodies || new Map();
+        for (const n of core.allNodes(this.root)) {
+            const f = this.cardFile(n.id);
+            if (!f) continue;
+            const had = this.bodies.get(n.id);
+            if (had && had.mtime === f.stat.mtime) continue;
+            const text = await this.app.vault.cachedRead(f);
+            this.bodies.set(n.id, { mtime: f.stat.mtime,
+                                    body: core.splitFrontmatter(text).body });
+        }
+        const out = new Map();
+        for (const [id, b] of this.bodies) out.set(id, b.body);
+        return out;
+    }
+
     // ---- export ----------------------------------------------------------
 
     async exportTo(node) {
@@ -849,8 +1062,9 @@ class DendriteView extends ItemView {
                     await this.app.vault.cachedRead(f)).body);
             }
         }
+        const ms = this.manuscript();
         const text = core.exportMarkdown(scope, (id) => bodies.get(id),
-                                         this.plugin.settings.headingTop);
+                                         ms.headingTop, this.numbers());
         const dir = normalizePath(
             (this.file.parent.path === '/' ? '' :
                 this.file.parent.path + '/') + 'exports');
@@ -871,6 +1085,130 @@ class DendriteView extends ItemView {
         await this.app.workspace.getLeaf('tab').openFile(out);
         new Notice(`Dendrite: exported to ${path}`);
     }
+}
+
+/** A number and a unit, written back as `500 words` or removed. */
+function limitSetting(container, name, desc, current, onChange) {
+    let amount = current ? String(current.amount) : '';
+    let unit = current ? current.unit : 'words';
+    const emit = () => {
+        const n = Number(amount);
+        onChange(amount.trim() && n > 0 ?
+            core.formatLimit({ amount: n, unit }) : null);
+    };
+    new Setting(container).setName(name).setDesc(desc)
+        .addText((t) => t.setPlaceholder('none').setValue(amount)
+            .onChange((v) => { amount = v; emit(); }))
+        .addDropdown((d) => d.addOption('words', 'words')
+            .addOption('characters', 'characters')
+            .addOption('pages', 'pages').setValue(unit)
+            .onChange((v) => { unit = v; emit(); }));
+}
+
+class ManuscriptModal extends Modal {
+    constructor(view) {
+        super(view.app);
+        this.view = view;
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        const view = this.view;
+        const ms = view.manuscript();
+        const draft = {};
+        this.titleEl.setText(`${view.file.basename}: settings`);
+        new Setting(contentEl).setName('Prefix')
+            .setDesc('Starts every card ID in this manuscript. Fixed once ' +
+                     'cards exist, since their file names carry it.')
+            .addText((t) => t.setValue(ms.prefix || '').setDisabled(true));
+        limitSetting(contentEl, 'Total limit',
+            'For the whole manuscript, shown in the top bar.', ms.limit,
+            (v) => { draft.dendrite_limit = v; });
+        new Setting(contentEl).setName('Count spaces in characters')
+            .setDesc('Funding portals differ; check the call.')
+            .addToggle((tg) => tg.setValue(ms.countSpaces)
+                .onChange((v) => { draft.dendrite_count_spaces = v; }));
+        new Setting(contentEl).setName('Words per page')
+            .setDesc('Only for page estimates while writing. The real ' +
+                     'count depends on the final layout.')
+            .addText((t) => t.setValue(String(ms.wordsPerPage))
+                .onChange((v) => {
+                    draft.dendrite_words_per_page = Number(v) > 0 ?
+                        Number(v) : null;
+                }));
+        new Setting(contentEl).setName('Number sections by position')
+            .setDesc('Write headings without numbers; sections are ' +
+                     'numbered from where they sit, and renumber when ' +
+                     'moved.')
+            .addToggle((tg) => tg.setValue(ms.number)
+                .onChange((v) => { draft.dendrite_number_sections = v; }));
+        new Setting(contentEl).setName('Top section heading level')
+            .setDesc('Export writes top-level sections at this level.')
+            .addDropdown((d) => {
+                for (let i = 1; i <= 4; i++) d.addOption(String(i), 'H' + i);
+                d.setValue(String(ms.headingTop)).onChange((v) => {
+                    draft.dendrite_heading_top = Number(v);
+                });
+            });
+        new Setting(contentEl).addButton((b) => b.setButtonText('Save')
+            .setCta().onClick(async () => {
+                await writeProps(view.app, view.file, draft);
+                this.close();
+            }));
+    }
+
+    onClose() { this.contentEl.empty(); }
+}
+
+class CardModal extends Modal {
+    constructor(view, id) {
+        super(view.app);
+        this.view = view;
+        this.id = id;
+    }
+
+    onOpen() {
+        const { contentEl } = this;
+        const view = this.view;
+        const fm = view.cardProps(this.id);
+        const aliases = Array.isArray(fm.aliases) ? fm.aliases :
+            (fm.aliases ? [fm.aliases] : []);
+        const draft = {};
+        this.titleEl.setText('Card properties');
+        new Setting(contentEl).setName('Label')
+            .setDesc('Shown in the index when the card does not open with ' +
+                     'a heading. Stored as the card\'s first alias.')
+            .addText((t) => t.setValue(aliases[0] || '')
+                .onChange((v) => {
+                    const rest = aliases.slice(1);
+                    draft.aliases = v.trim() ? [v.trim(), ...rest] :
+                        (rest.length ? rest : null);
+                }));
+        limitSetting(contentEl, 'Limit',
+            'A target for this card and everything under it, counted from ' +
+            'what export would write.',
+            core.parseLimit(fm.dendrite_limit),
+            (v) => { draft.dendrite_limit = v; });
+        new Setting(contentEl).addButton((b) => b.setButtonText('Save')
+            .setCta().onClick(async () => {
+                const f = view.cardFile(this.id);
+                if (f) await writeProps(view.app, f, draft);
+                this.close();
+            }));
+    }
+
+    onClose() { this.contentEl.empty(); }
+}
+
+/** Set or remove properties through Obsidian's own frontmatter writer. */
+async function writeProps(app, file, draft) {
+    if (!Object.keys(draft).length) return;
+    await app.fileManager.processFrontMatter(file, (fm) => {
+        for (const [k, v] of Object.entries(draft)) {
+            if (v === null || v === undefined) delete fm[k];
+            else fm[k] = v;
+        }
+    });
 }
 
 class NewManuscriptModal extends Modal {

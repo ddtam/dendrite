@@ -173,3 +173,70 @@ test('opening at a card makes it the active card', async () => {
     assert.equal(view.active, 'G-bbbbb');
     assert.ok(view.cardEls.get('G-bbbbb').hasClass('is-active'));
 });
+
+test('numbering shows on section cards and never enters their notes',
+     async () => {
+    const { view, read } = await open(
+        '---\ndendrite_prefix: G\ndendrite_number_sections: true\n---\n' +
+        '- [[G-aaaaa|Outline]]\n    - [[G-bbbbb|Sub]]\n' +
+        '    - [[G-ccccc|p]]\n- [[G-ddddd|Methods]]\n',
+        { 'G-aaaaa': '# Outline', 'G-bbbbb': '# Sub', 'G-ccccc': 'Text.',
+          'G-ddddd': '# Methods' });
+    const num = (id) => view.cardEls.get(id)
+        .querySelector('.dendrite-num')?.textContent;
+    assert.equal(num('G-aaaaa'), '1.');
+    assert.equal(num('G-bbbbb'), '1.1');
+    assert.equal(num('G-ccccc'), undefined);
+    assert.equal(num('G-ddddd'), '2.');
+    view.active = 'G-ddddd';
+    await view.structural('up');
+    assert.equal(num('G-ddddd'), '1.');
+    assert.equal(num('G-aaaaa'), '2.');
+    assert.equal(read(cardPath('G-aaaaa')), '# Outline',
+                 'the number is not written into the card');
+    await view.exportTo(null);
+    assert.equal(read('W/Grant/exports/Grant.md'),
+                 '# 1. Methods\n\n# 2. Outline\n\n## 2.1 Sub\n\nText.\n');
+});
+
+test('a card limit is counted from its branch and marked when over',
+     async () => {
+    const { view, app } = await open(
+        '---\ndendrite_prefix: G\ndendrite_limit: 5 words\n---\n' +
+        '- [[G-aaaaa|Aims]]\n    - [[G-bbbbb|p]]\n',
+        { 'G-aaaaa': '---\ndendrite_limit: 3 words\n---\n# Aims\nplan',
+          'G-bbbbb': 'one two three %%not counted%%' });
+    await view.updateCounts();
+    const badge = () => view.cardEls.get('G-aaaaa')
+        .querySelector('.dendrite-count');
+    assert.equal(badge().textContent, '4 / 3 words');
+    assert.ok(badge().hasClass('is-over'));
+    assert.match(view.totalEl.textContent, /^4 \/ 5 words/);
+    const f = view.cardFile('G-aaaaa');
+    await app.fileManager.processFrontMatter(f, (fm) => {
+        fm.dendrite_limit = '10 words';
+    });
+    await view.updateCounts();
+    assert.equal(badge().textContent, '4 / 10 words');
+    assert.ok(!badge().hasClass('is-over'));
+});
+
+test('bold, tab and list enter edit the card and are saved', async () => {
+    const { view, read } = await open(
+        '---\ndendrite_prefix: G\n---\n- [[G-aaaaa|A]]\n',
+        { 'G-aaaaa': '- point' });
+    await view.startEdit('G-aaaaa');
+    const ta = view.editing.ta;
+    ta.setSelectionRange(2, 7);
+    assert.equal(view.editKey('bold'), false, 'the key is handled');
+    assert.equal(ta.value, '- **point**');
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+    view.editKey('enter');
+    assert.equal(ta.value, '- **point**\n- ');
+    view.editKey('indent');
+    assert.equal(ta.value, '- **point**\n    - ');
+    await view.endEdit();
+    assert.equal(read(cardPath('G-aaaaa')), '- **point**\n    - ');
+    assert.equal(view.editKey('bold'), true,
+                 'outside the editor the key goes through');
+});
