@@ -455,9 +455,11 @@ function alignColumns(cols, active, pos, heights) {
  * into are filled once where they overlap, never doubled. Each pair is a
  * card's box and the box of the group holding its children, in the SVG's
  * coordinates, each with its corner radius `r`. The band leaves the card
- * from the straight part of its right edge, tucked under it, and enters
- * the group's straight left edge; the group is a rounded rectangle. All
- * subpaths run clockwise, so the nonzero fill joins them as one shape.
+ * from the straight part of its right edge, tucked under it, and meets
+ * the group at its full height, reaching in past its rounded left corners
+ * so the band's edges run straight into the group's top and bottom edges
+ * with no notch. All subpaths run clockwise, so the nonzero fill joins
+ * them as one shape.
  */
 function flowPath(pairs) {
     const f = (x) => Math.round(x * 10) / 10;
@@ -470,8 +472,8 @@ function flowPath(pairs) {
         const x2 = b.left + rb;
         const at = a.top + ra;
         const ab = a.bottom - ra;
-        const bt = b.top + rb;
-        const bb = b.bottom - rb;
+        const bt = b.top;
+        const bb = b.bottom;
         const mx = (a.right + b.left) / 2;
         parts.push(`M${f(x1)},${f(at)} C${f(mx)},${f(at)} ${f(mx)},${f(bt)} ` +
                    `${f(x2)},${f(bt)} L${f(x2)},${f(bb)} C${f(mx)},${f(bb)} ` +
@@ -491,24 +493,26 @@ function flowPath(pairs) {
 }
 
 /**
- * The thread: one band per step of the active card's path, from a card
- * to the specific card it leads to in the next column, so which card a
- * card came from is unambiguous however deep the path. Each pair is two
- * card boxes; each band runs from the straight part of one card's right
- * edge to the straight part of the next card's left edge, tucked under
- * both.
+ * The thread: one slim ribbon per step of the active card's path, from
+ * the middle of a card's right edge to the middle of the left edge of the
+ * specific card it leads to, so which card a card came from is
+ * unambiguous however deep the path. Each pair is two card boxes. The
+ * ribbon is `width` tall at each end, or less on a short card, and is
+ * tucked under both cards.
  */
-function threadPath(pairs) {
+function threadPath(pairs, width = 12) {
     const f = (x) => Math.round(x * 10) / 10;
     const parts = [];
     for (const { from: a, to: b } of pairs) {
-        const ra = Math.min(a.r || 0, (a.bottom - a.top) / 2);
-        const rb = Math.min(b.r || 0, (b.bottom - b.top) / 2);
+        const ha = Math.min(width, a.bottom - a.top - 2 * (a.r || 0)) / 2;
+        const hb = Math.min(width, b.bottom - b.top - 2 * (b.r || 0)) / 2;
+        const ma = (a.top + a.bottom) / 2;
+        const mb = (b.top + b.bottom) / 2;
         const x1 = a.right - 1;
         const x2 = b.left + 1;
         const mx = (a.right + b.left) / 2;
-        const [at, ab] = [a.top + ra, a.bottom - ra];
-        const [bt, bb] = [b.top + rb, b.bottom - rb];
+        const [at, ab] = [ma - Math.max(ha, 1), ma + Math.max(ha, 1)];
+        const [bt, bb] = [mb - Math.max(hb, 1), mb + Math.max(hb, 1)];
         parts.push(`M${f(x1)},${f(at)} C${f(mx)},${f(at)} ${f(mx)},${f(bt)} ` +
                    `${f(x2)},${f(bt)} L${f(x2)},${f(bb)} C${f(mx)},${f(bb)} ` +
                    `${f(mx)},${f(ab)} ${f(x1)},${f(ab)} Z`);

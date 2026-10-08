@@ -198,8 +198,8 @@
     flex-direction: column;
     gap: 10px;
     margin-bottom: 28px;
-    padding: 4px;
-    border-radius: var(--radius-m);
+    padding: 10px;
+    border-radius: 12px;
     transition: background-color 150ms ease;
 }
 
