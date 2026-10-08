@@ -282,18 +282,25 @@
     box-shadow: none !important;
 }
 
-/* Inside the card's own box: a card is paint-contained, so anything
-   positioned outside it is clipped. */
-.dendrite-toolbar {
+/* The footer row inside the card's own box, since a card is
+   paint-contained and anything outside it is clipped: the quota at the
+   left, the active card's tools at the right, the same size. */
+.dendrite-card-foot {
     display: flex;
-    justify-content: flex-end;
-    gap: 2px;
-    margin: 8px -8px -6px 0;
-    padding-top: 4px;
-    border-top: 1px solid var(--background-modifier-border);
+    align-items: center;
+    justify-content: space-between;
+    min-height: 24px;
+    margin: 6px -8px -6px -6px;
 }
 
-.dendrite-toolbar button {
+.dendrite-toolbar {
+    display: flex;
+    gap: 2px;
+    margin-left: auto;
+}
+
+.dendrite-toolbar button,
+.dendrite-quota {
     padding: 2px 4px;
     height: auto;
 }
@@ -409,15 +416,8 @@
     outline: none;
 }
 
-/* A card's quota: a target and a bar at its bottom left. */
-.dendrite-card {
-    padding-bottom: 22px;
-}
-
+/* A card's quota: a target and a bar at the left of its footer. */
 .dendrite-quota {
-    position: absolute;
-    left: 8px;
-    bottom: 5px;
     display: flex;
     align-items: center;
     gap: 4px;
@@ -426,13 +426,21 @@
     transition: opacity 150ms ease;
 }
 
+.dendrite-quota {
+    border-radius: var(--radius-s);
+}
+
+.dendrite-quota:hover {
+    background: var(--background-modifier-hover);
+}
+
 .dendrite-quota-icon {
     display: inline-flex;
 }
 
 .dendrite-quota-icon svg {
-    width: 13px;
-    height: 13px;
+    width: var(--icon-size, 16px);
+    height: var(--icon-size, 16px);
 }
 
 .dendrite-quota-bar {

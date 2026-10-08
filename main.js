@@ -1106,7 +1106,8 @@ var DendriteView = class extends ItemView {
       });
       card.addClass("is-pending");
     }
-    this.renderQuotaWidget(card, n.id);
+    const foot = card.createDiv({ cls: "dendrite-card-foot" });
+    this.renderQuotaWidget(foot, n.id);
     this.cardEls.set(n.id, card);
     if (this.observer) this.observer.observe(card);
     if (this.resizer) this.resizer.observe(card);
@@ -1280,7 +1281,8 @@ var DendriteView = class extends ItemView {
     this.toolbar = null;
     const card = this.active && this.cardEls.get(this.active);
     if (!card || this.editing) return;
-    const t = card.createDiv({ cls: "dendrite-toolbar" });
+    const foot = card.querySelector(":scope > .dendrite-card-foot") || card.createDiv({ cls: "dendrite-card-foot" });
+    const t = foot.createDiv({ cls: "dendrite-toolbar" });
     const btn = (icon, title, fn) => {
       const b = t.createEl("button", { cls: "clickable-icon" });
       setIcon(b, icon);
@@ -2165,8 +2167,8 @@ var DendriteView = class extends ItemView {
    * use. Details fade in on hover; a click edits the quota. A card
    * without one shows the target only on hover, to offer setting one.
    */
-  renderQuotaWidget(card, id) {
-    const w = card.createDiv({ cls: "dendrite-quota is-empty" });
+  renderQuotaWidget(foot, id) {
+    const w = foot.createDiv({ cls: "dendrite-quota is-empty" });
     setIcon(w.createSpan({ cls: "dendrite-quota-icon" }), "target");
     const bar = w.createDiv({ cls: "dendrite-quota-bar" });
     bar.createDiv({ cls: "dendrite-quota-fill" });
@@ -2178,10 +2180,12 @@ var DendriteView = class extends ItemView {
       this.editQuota(id, w);
     });
     const r = this.quotaReports && this.quotaReports.get(id);
-    if (r) this.fillQuota(card, id);
+    if (r) this.fillQuota(foot.parentElement, id);
   }
   fillQuota(card, id) {
-    const w = card.querySelector(":scope > .dendrite-quota");
+    const w = card.querySelector(
+      ":scope > .dendrite-card-foot > .dendrite-quota"
+    );
     if (!w) return;
     const r = this.quotaReports && this.quotaReports.get(id);
     w.removeClass("is-over-required");

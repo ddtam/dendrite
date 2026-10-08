@@ -682,3 +682,15 @@ test('merging into the card above or the parent, and undoing it',
     assert.equal(read(cardPath('G-aaaaa')), 'Para A.',
                  'nothing above the first card: unchanged');
 });
+
+test('the quota and the active card\'s tools share one footer row',
+     async () => {
+    const { view } = await open(
+        '---\ndendrite_prefix: G\n---\n- [[G-aaaaa|A]]\n', { 'G-aaaaa': 'A' });
+    const card = view.cardEls.get('G-aaaaa');
+    const foot = card.querySelector(':scope > .dendrite-card-foot');
+    assert.ok(foot.querySelector(':scope > .dendrite-quota'), 'quota left');
+    assert.ok(foot.querySelector(':scope > .dendrite-toolbar'), 'tools right');
+    assert.equal(foot.firstElementChild.className.split(' ')[0],
+                 'dendrite-quota');
+});
