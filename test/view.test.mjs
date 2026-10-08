@@ -21,7 +21,8 @@ async function open(indexText, cards = {}) {
         await app.vault.create(`W/Grant/cards/${id}.md`, t);
     }
     const plugin = { settings: { headingTop: 1, cardWidth: 380,
-                                 autosaveMs: 20 } };
+                                 autosaveMs: 20, vimKeys: true },
+                     openAsMarkdown() {} };
     const view = new DendriteView({ app, updateHeader() {},
                                     detach() {} }, plugin);
     await view.onOpen();
@@ -255,4 +256,50 @@ test('the active path flows into each child group', async () => {
     assert.deepEqual(flows.sort(), ['G-bbbbb', 'G-ccccc'],
                      'A opens into its children, B into its own');
     assert.equal(view.flowSvg.querySelectorAll('path').length, 2);
+});
+
+test('vim keys move, insert, rearrange and delete in normal mode',
+     async () => {
+    const { view, read } = await open(
+        '---\ndendrite_prefix: G\n---\n' +
+        '- [[G-aaaaa|A]]\n    - [[G-bbbbb|B]]\n- [[G-ccccc|C]]\n',
+        { 'G-aaaaa': 'A', 'G-bbbbb': 'B', 'G-ccccc': 'C' });
+    const key = async (k) => {
+        view.contentEl.dispatchEvent(new h.window.KeyboardEvent(
+            'keydown', { key: k, bubbles: true, cancelable: true }));
+        await tick(5);
+    };
+    assert.equal(view.active, 'G-aaaaa');
+    await key('j');
+    assert.equal(view.active, 'G-ccccc');
+    await key('k');
+    await key('l');
+    assert.equal(view.active, 'G-bbbbb');
+    await key('h');
+    assert.equal(view.active, 'G-aaaaa');
+    assert.equal(view.modeEl.textContent, 'NORMAL');
+    await key('i');
+    assert.equal(view.editing.id, 'G-aaaaa');
+    assert.equal(view.editing.ta.selectionStart, 0);
+    assert.equal(view.modeEl.textContent, 'INSERT');
+    await key('j');
+    assert.equal(view.active, 'G-aaaaa', 'letters type in insert mode');
+    await view.endEdit();
+    await key('J');
+    assert.match(read(INDEX), /- \[\[G-ccccc\|C\]\]\n- \[\[G-aaaaa/);
+    await key('o');
+    const fresh = view.active;
+    assert.ok(view.editing && view.editing.id === fresh, 'o opens a card');
+    await view.endEdit();
+    await key('d');
+    assert.ok(view.byId.has(fresh), 'one d does nothing');
+    await key('d');
+    assert.ok(!view.byId.has(fresh), 'dd deletes');
+    await key('u');
+    assert.ok(view.byId.has(fresh), 'u restores');
+    await key('g');
+    await key('g');
+    assert.equal(view.active, 'G-ccccc', 'gg goes to the top');
+    await key('G');
+    assert.equal(view.active, fresh);
 });

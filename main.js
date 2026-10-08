@@ -416,7 +416,8 @@ var DEFAULTS = {
   headingTop: 1,
   cardWidth: 380,
   autosaveMs: 600,
-  openInDendrite: true
+  openInDendrite: true,
+  vimKeys: true
 };
 var CARD_NAME = /^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*-[a-z0-9]{5}$/;
 var UNDO_DEPTH = 50;
@@ -470,6 +471,7 @@ var DendriteView = class extends ItemView {
         this.active = state.card;
         this.applyActive(false);
       }
+      this.contentEl.focus();
     }
     return super.setState(state, result);
   }
@@ -506,6 +508,11 @@ var DendriteView = class extends ItemView {
       this.contentEl,
       "click",
       (e) => this.onClick(e)
+    );
+    this.registerDomEvent(
+      this.contentEl,
+      "keydown",
+      (e) => this.onNavKey(e)
     );
     this.registerDomEvent(this.contentEl, "dblclick", (e) => {
       const card = e.target.closest(".dendrite-card");
@@ -615,6 +622,8 @@ var DendriteView = class extends ItemView {
   }
   renderBar(el) {
     const bar = el.createDiv({ cls: "dendrite-bar" });
+    this.modeEl = bar.createDiv({ cls: "dendrite-mode" });
+    this.showMode();
     bar.createDiv({ cls: "dendrite-title", text: this.file.basename });
     const btn = (icon, label, title, fn) => {
       const b = bar.createEl("button", { cls: "dendrite-bar-btn" });
@@ -1048,7 +1057,7 @@ var DendriteView = class extends ItemView {
     ta.setSelectionRange(r.selStart, r.selEnd);
     return false;
   }
-  async startEdit(id) {
+  async startEdit(id, atStart = false) {
     if (this.editing) {
       if (this.editing.id === id) return;
       await this.endEdit();
@@ -1100,7 +1109,9 @@ var DendriteView = class extends ItemView {
     this.renderToolbar();
     fit();
     ta.focus();
-    ta.setSelectionRange(ta.value.length, ta.value.length);
+    const at = atStart ? 0 : ta.value.length;
+    ta.setSelectionRange(at, at);
+    this.showMode();
   }
   /** Write the editor's text to its card, keeping the frontmatter. */
   save(ed) {
@@ -1134,7 +1145,62 @@ var DendriteView = class extends ItemView {
     }
     await this.renderCard(ed.id);
     this.renderToolbar();
+    this.showMode();
     this.contentEl.focus();
+  }
+  showMode() {
+    if (!this.modeEl) return;
+    this.modeEl.setText(this.editing ? "INSERT" : "NORMAL");
+    this.modeEl.toggleClass("is-insert", !!this.editing);
+  }
+  /**
+   * Vim-style keys in normal mode, when no card is being edited. Plain
+   * letters are bound to nothing else here, so they are handled from
+   * the pane's own keydown rather than registered in Obsidian's scope.
+   */
+  onNavKey(e) {
+    if (this.editing || !this.plugin.settings.vimKeys) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.target.closest("input, textarea, select")) return;
+    const prev = this.pendingKey;
+    this.pendingKey = null;
+    const k = e.key;
+    const act = {
+      h: () => this.navigate("left"),
+      j: () => this.navigate("down"),
+      k: () => this.navigate("up"),
+      l: () => this.navigate("right"),
+      i: () => this.active && this.startEdit(this.active, true),
+      a: () => this.active && this.startEdit(this.active),
+      o: () => this.insert("below"),
+      O: () => this.insert("above"),
+      n: () => this.insert(this.active ? "child" : "first"),
+      J: () => this.structural("down"),
+      K: () => this.structural("up"),
+      ">": () => this.structural("indent"),
+      "<": () => this.structural("outdent"),
+      u: () => this.doUndo(),
+      G: () => this.columnEnd(false)
+    }[k];
+    if (k === "d" || k === "g") {
+      e.preventDefault();
+      if (prev === k) {
+        if (k === "d") this.deleteActive();
+        else this.columnEnd(true);
+      } else {
+        this.pendingKey = k;
+      }
+      return;
+    }
+    if (!act) return;
+    e.preventDefault();
+    act();
+  }
+  columnEnd(top) {
+    const node = this.active && this.byId.get(this.active);
+    const col = node ? this.cols[node.depth] : this.cols[0];
+    if (!col || !col.length) return;
+    this.select((top ? col[0] : col[col.length - 1]).id);
   }
   async syncLabel(id, body) {
     const node = this.byId.get(id);
@@ -1679,6 +1745,10 @@ var DendriteSettings = class extends PluginSettingTab {
     }));
     new Setting(containerEl).setName("Open index notes in Dendrite").setDesc("Opening an index note shows it in Dendrite. Its markdown stays one button away in the view.").addToggle((tg) => tg.setValue(s.openInDendrite).onChange((v) => {
       s.openInDendrite = v;
+      save();
+    }));
+    new Setting(containerEl).setName("Vim-style keys").setDesc("In normal mode: h j k l to move, i or a to edit, o and O for a new card below or above, n for a child, J and K to move a card, > and < to indent, dd to delete, u to undo, gg and G for the column's ends.").addToggle((tg) => tg.setValue(s.vimKeys).onChange((v) => {
+      s.vimKeys = v;
       save();
     }));
     new Setting(containerEl).setName("Autosave delay").setDesc("Milliseconds after the last keystroke before a card is written to its note.").addSlider((sl) => sl.setLimits(200, 3e3, 100).setValue(s.autosaveMs).setDynamicTooltip().onChange((v) => {

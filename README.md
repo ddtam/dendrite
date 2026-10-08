@@ -55,6 +55,22 @@ In the editor:
 | Ctrl+Backspace | Delete the card and its children |
 | Ctrl+Z | Undo the last structural change |
 
+### Vim-style keys
+
+In normal mode, shown as **NORMAL** in the bar, no card is being edited and letters are commands. **INSERT** means a card is open for writing; Escape returns to normal mode. They can be turned off in the settings.
+
+| Key | Action |
+| --- | --- |
+| h j k l | Left to the parent, down, up, right to a child |
+| i / a | Edit with the cursor at the start / at the end |
+| o / O | New card below / above |
+| n | New child card |
+| J / K | Move the card down / up |
+| > / < | Indent / outdent the card |
+| dd | Delete the card and its children |
+| u | Undo |
+| gg / G | First / last card in the column |
+
 On a phone, the active card's toolbar offers the same actions.
 
 **Text is never discarded.** A card saves while you type and again whenever you leave it, Escape included. Deleted cards go to Obsidian's trash, and Ctrl+Z restores them.
