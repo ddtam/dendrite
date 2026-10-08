@@ -249,6 +249,7 @@ var require_core = __commonJS({
 // src/main.js
 var {
   ItemView,
+  MarkdownView,
   Plugin,
   PluginSettingTab,
   Setting,
@@ -269,8 +270,10 @@ var DEFAULTS = {
   writingFolder: "Writing",
   headingTop: 1,
   cardWidth: 380,
-  autosaveMs: 600
+  autosaveMs: 600,
+  openInDendrite: true
 };
+var CARD_NAME = /^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*-[a-z0-9]{5}$/;
 var UNDO_DEPTH = 50;
 function prefixOf(app, file) {
   const fm = app.metadataCache.getFileCache(file)?.frontmatter;
@@ -318,6 +321,10 @@ var DendriteView = class extends ItemView {
     if (f instanceof TFile) {
       this.file = f;
       await this.reload();
+      if (state.card && this.byId.has(state.card)) {
+        this.active = state.card;
+        this.applyActive(false);
+      }
     }
     return super.setState(state, result);
   }
@@ -456,6 +463,31 @@ var DendriteView = class extends ItemView {
   renderBar(el) {
     const bar = el.createDiv({ cls: "dendrite-bar" });
     bar.createDiv({ cls: "dendrite-title", text: this.file.basename });
+    const btn = (icon, label, title, fn) => {
+      const b = bar.createEl("button", { cls: "dendrite-bar-btn" });
+      setIcon(b.createSpan({ cls: "dendrite-bar-icon" }), icon);
+      b.createSpan({ text: label });
+      b.setAttr("aria-label", title);
+      b.onclick = fn;
+    };
+    btn(
+      "file-output",
+      "Export",
+      "Export the manuscript to markdown",
+      () => this.exportTo(null)
+    );
+    btn(
+      "undo-2",
+      "Undo",
+      "Undo the last structural change (Ctrl+Z)",
+      () => this.doUndo()
+    );
+    btn(
+      "file-text",
+      "Index",
+      "Open the index note as markdown",
+      () => this.plugin.openAsMarkdown(this.file)
+    );
     const unlinked = this.unlinkedCards();
     if (unlinked.length) {
       const warn = bar.createDiv({ cls: "dendrite-warn" });
@@ -463,19 +495,6 @@ var DendriteView = class extends ItemView {
       const fix = warn.createEl("button", { text: "Add at the end" });
       fix.onclick = () => this.adopt(unlinked);
     }
-    const btn = (icon, title, fn) => {
-      const b = bar.createEl("button", { cls: "clickable-icon" });
-      setIcon(b, icon);
-      b.setAttr("aria-label", title);
-      b.onclick = fn;
-    };
-    btn("undo-2", "Undo the last structural change", () => this.doUndo());
-    btn(
-      "file-output",
-      "Export the manuscript to markdown",
-      () => this.exportTo(null)
-    );
-    btn("file-text", "Open the index note", () => this.app.workspace.getLeaf("tab").openFile(this.file));
   }
   renderShell(group, n) {
     const card = group.createDiv({ cls: "dendrite-card" });
@@ -558,10 +577,15 @@ var DendriteView = class extends ItemView {
       b.appendChild(out);
       now.removeClass("is-pending");
       now.removeClass("is-missing");
+      if (this.lineage && this.lineage.has(id)) this.centre(false);
     }
   }
   /** Highlight the active card's lineage and bring it into view. */
   applyActive(smooth = true) {
+    this.highlight();
+    this.centre(smooth);
+  }
+  highlight() {
     if (!this.board) return;
     const node = this.active && this.byId.get(this.active);
     const lineage = /* @__PURE__ */ new Set();
@@ -569,13 +593,25 @@ var DendriteView = class extends ItemView {
       for (let n = node; n && n.id; n = n.parent) lineage.add(n.id);
       for (const d of core.descendants(node)) lineage.add(d.id);
     }
+    this.lineage = lineage;
     this.board.toggleClass("has-active", !!node);
     for (const [id, el] of this.cardEls) {
       el.toggleClass("is-active", id === this.active);
       el.toggleClass("is-lineage", lineage.has(id));
     }
     this.renderToolbar();
+  }
+  /**
+   * Centre the active card, horizontally and vertically, and in every
+   * other column the part of its lineage that column holds.
+   */
+  centre(smooth = true) {
+    if (!this.board) return;
+    const node = this.active && this.byId.get(this.active);
     if (!node) return;
+    const lineage = /* @__PURE__ */ new Set();
+    for (let n = node; n && n.id; n = n.parent) lineage.add(n.id);
+    for (const d of core.descendants(node)) lineage.add(d.id);
     const behavior = smooth ? "smooth" : "auto";
     const cols = this.board.querySelectorAll(".dendrite-col");
     cols.forEach((col2, d) => {
@@ -651,7 +687,7 @@ var DendriteView = class extends ItemView {
     );
     item("Open card note", "file", () => {
       const f = this.cardFile(this.active);
-      if (f) this.app.workspace.getLeaf("tab").openFile(f);
+      if (f) this.plugin.openAsMarkdown(f);
     });
     m.addSeparator();
     item(
@@ -803,6 +839,7 @@ var DendriteView = class extends ItemView {
     ta.addEventListener("input", () => {
       ed.dirty = true;
       fit();
+      this.centre(false);
       clearTimeout(ed.timer);
       ed.timer = setTimeout(
         () => this.save(ed),
@@ -1148,6 +1185,10 @@ var DendriteSettings = class extends PluginSettingTab {
       save();
       this.plugin.rerender();
     }));
+    new Setting(containerEl).setName("Open index notes in Dendrite").setDesc("Opening an index note shows it in Dendrite. Its markdown stays one button away in the view.").addToggle((tg) => tg.setValue(s.openInDendrite).onChange((v) => {
+      s.openInDendrite = v;
+      save();
+    }));
     new Setting(containerEl).setName("Autosave delay").setDesc("Milliseconds after the last keystroke before a card is written to its note.").addSlider((sl) => sl.setLimits(200, 3e3, 100).setValue(s.autosaveMs).setDynamicTooltip().onChange((v) => {
       s.autosaveMs = v;
       save();
@@ -1179,6 +1220,18 @@ module.exports = class DendritePlugin extends Plugin {
       name: "New manuscript",
       callback: () => new NewManuscriptModal(this).open()
     });
+    this.markdownLeaves = /* @__PURE__ */ new WeakMap();
+    this.registerEvent(this.app.workspace.on(
+      "file-open",
+      (f) => this.onFileOpen(f)
+    ));
+    this.registerEvent(this.app.workspace.on(
+      "active-leaf-change",
+      (leaf) => this.decorate(leaf)
+    ));
+    this.app.workspace.onLayoutReady(() => {
+      this.app.workspace.iterateAllLeaves((l) => this.decorate(l));
+    });
     this.registerEvent(this.app.workspace.on("file-menu", (menu, f) => {
       if (!isIndex(this.app, f)) return;
       menu.addItem((i) => i.setTitle("Open in Dendrite").setIcon("list-tree").onClick(() => this.openIndex(f)));
@@ -1192,14 +1245,71 @@ module.exports = class DendritePlugin extends Plugin {
       leaf.view.render();
     }
   }
-  async openIndex(file) {
-    const leaf = this.app.workspace.getLeaf("tab");
-    await leaf.setViewState({
+  async openIndex(file, card = null, leaf = null) {
+    const target = leaf || this.app.workspace.getLeaf("tab");
+    await target.setViewState({
       type: VIEW,
       active: true,
-      state: { file: file.path }
+      state: { file: file.path, card }
     });
-    this.app.workspace.revealLeaf(leaf);
+    this.app.workspace.revealLeaf(target);
+  }
+  async openAsMarkdown(file) {
+    const leaf = this.app.workspace.getLeaf("tab");
+    this.markdownLeaves.set(leaf, file.path);
+    await leaf.openFile(file);
+  }
+  /** An index note opened as markdown switches to Dendrite. */
+  onFileOpen(file) {
+    if (!this.settings.openInDendrite || !file) return;
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!view || view.file !== file || !isIndex(this.app, file)) return;
+    if (this.markdownLeaves.get(view.leaf) === file.path) return;
+    this.openIndex(file, null, view.leaf);
+  }
+  isCard(file) {
+    return file instanceof TFile && file.extension === "md" && file.parent && file.parent.name === "cards" && CARD_NAME.test(file.basename);
+  }
+  /** The index note that links a card, found from Obsidian's links. */
+  indexFor(card) {
+    const links = this.app.metadataCache.resolvedLinks;
+    for (const src of Object.keys(links)) {
+      if (!links[src][card.path]) continue;
+      const f = this.app.vault.getAbstractFileByPath(src);
+      if (isIndex(this.app, f)) return f;
+    }
+    return null;
+  }
+  /**
+   * Give a markdown view of an index or a card a header button back
+   * into Dendrite, at that card when it is one.
+   */
+  decorate(leaf) {
+    const view = leaf && leaf.view;
+    if (!(view instanceof MarkdownView)) return;
+    const file = view.file;
+    const kind = isIndex(this.app, file) ? "index" : this.isCard(file) ? "card" : null;
+    if (view.dendriteAction) {
+      if (view.dendriteAction.kind === kind && view.dendriteAction.path === (file && file.path)) return;
+      view.dendriteAction.el.remove();
+      view.dendriteAction = null;
+    }
+    if (!kind) return;
+    const el = view.addAction(
+      "list-tree",
+      kind === "index" ? "Open in Dendrite" : "Open this card in Dendrite",
+      () => {
+        if (kind === "index") {
+          this.markdownLeaves.delete(view.leaf);
+          this.openIndex(file, null, view.leaf);
+          return;
+        }
+        const index = this.indexFor(file);
+        if (index) this.openIndex(index, file.basename, view.leaf);
+        else new Notice("Dendrite: no index note links this card.");
+      }
+    );
+    view.dendriteAction = { el, kind, path: file.path };
   }
   prefixesInUse() {
     const out = /* @__PURE__ */ new Set();

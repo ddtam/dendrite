@@ -163,3 +163,13 @@ test('export writes the manuscript beside the index', async () => {
     assert.equal(read('W/Grant/exports/Grant.md'),
                  '# Aims\n\nProse here.\n');
 });
+
+test('opening at a card makes it the active card', async () => {
+    const { view } = await open(
+        '---\ndendrite_prefix: G\n---\n- [[G-aaaaa|A]]\n- [[G-bbbbb|B]]\n',
+        { 'G-aaaaa': 'A', 'G-bbbbb': 'B' });
+    assert.equal(view.active, 'G-aaaaa');
+    await view.setState({ file: INDEX, card: 'G-bbbbb' });
+    assert.equal(view.active, 'G-bbbbb');
+    assert.ok(view.cardEls.get('G-bbbbb').hasClass('is-active'));
+});

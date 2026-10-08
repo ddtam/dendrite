@@ -175,6 +175,7 @@ function makeApp() {
 const notices = [];
 const obsidian = {
     TFile, TFolder,
+    MarkdownView: class {},
     ItemView: class {
         constructor(leaf) {
             this.leaf = leaf;
