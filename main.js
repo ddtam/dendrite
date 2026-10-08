@@ -350,6 +350,21 @@ var require_core = __commonJS({
       }
       return parts.join(" ");
     }
+    function threadPath(pairs) {
+      const f = (x) => Math.round(x * 10) / 10;
+      const parts = [];
+      for (const { from: a, to: b } of pairs) {
+        const ra = Math.min(a.r || 0, (a.bottom - a.top) / 2);
+        const rb = Math.min(b.r || 0, (b.bottom - b.top) / 2);
+        const x1 = a.right - 1;
+        const x2 = b.left + 1;
+        const mx = (a.right + b.left) / 2;
+        const [at, ab] = [a.top + ra, a.bottom - ra];
+        const [bt, bb] = [b.top + rb, b.bottom - rb];
+        parts.push(`M${f(x1)},${f(at)} C${f(mx)},${f(at)} ${f(mx)},${f(bt)} ${f(x2)},${f(bt)} L${f(x2)},${f(bb)} C${f(mx)},${f(bb)} ${f(mx)},${f(ab)} ${f(x1)},${f(ab)} Z`);
+      }
+      return parts.join(" ");
+    }
     var NUM = "\\d+(?:\\.\\d+)?";
     var LIMIT = new RegExp(`^\\s*(${NUM}(?:\\s*/\\s*${NUM})?)\\s*(words?|characters?|chars?|pages?)\\s*$`, "i");
     function parseAmount(text) {
@@ -457,6 +472,7 @@ var require_core = __commonJS({
       mergeIntoAbove,
       mergeIntoParent,
       flowPath,
+      threadPath,
       INDENT,
       splitFrontmatter,
       parseIndex,
@@ -1263,20 +1279,31 @@ var DendriteView = class extends ItemView {
       };
     };
     const pairs = [];
+    const steps = [];
     for (let n = node; n && n.id; n = n.parent) {
-      if (!n.children.length) continue;
       const card = this.cardEls.get(n.id);
+      if (!card) continue;
+      if (n.parent && n.parent.id) {
+        const up = this.cardEls.get(n.parent.id);
+        if (up) steps.push({ from: rel(up), to: rel(card) });
+      }
+      if (!n.children.length) continue;
       const child = this.cardEls.get(n.children[0].id);
       const group = child && child.parentElement;
-      if (!card || !group) continue;
+      if (!group) continue;
       group.classList.add("is-flow");
       pairs.push({ card: rel(card), group: rel(group) });
     }
-    if (!pairs.length) return;
     const NS = "http://www.w3.org/2000/svg";
-    const path = document.createElementNS(NS, "path");
-    path.setAttribute("d", core.flowPath(pairs));
-    svg.appendChild(path);
+    const draw = (cls, d) => {
+      if (!d) return;
+      const path = document.createElementNS(NS, "path");
+      path.setAttribute("class", cls);
+      path.setAttribute("d", d);
+      svg.appendChild(path);
+    };
+    draw("dendrite-flow-context", core.flowPath(pairs));
+    draw("dendrite-flow-thread", core.threadPath(steps));
   }
   /**
    * Centre the active card, horizontally and vertically, and in every

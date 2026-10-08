@@ -490,6 +490,32 @@ function flowPath(pairs) {
     return parts.join(' ');
 }
 
+/**
+ * The thread: one band per step of the active card's path, from a card
+ * to the specific card it leads to in the next column, so which card a
+ * card came from is unambiguous however deep the path. Each pair is two
+ * card boxes; each band runs from the straight part of one card's right
+ * edge to the straight part of the next card's left edge, tucked under
+ * both.
+ */
+function threadPath(pairs) {
+    const f = (x) => Math.round(x * 10) / 10;
+    const parts = [];
+    for (const { from: a, to: b } of pairs) {
+        const ra = Math.min(a.r || 0, (a.bottom - a.top) / 2);
+        const rb = Math.min(b.r || 0, (b.bottom - b.top) / 2);
+        const x1 = a.right - 1;
+        const x2 = b.left + 1;
+        const mx = (a.right + b.left) / 2;
+        const [at, ab] = [a.top + ra, a.bottom - ra];
+        const [bt, bb] = [b.top + rb, b.bottom - rb];
+        parts.push(`M${f(x1)},${f(at)} C${f(mx)},${f(at)} ${f(mx)},${f(bt)} ` +
+                   `${f(x2)},${f(bt)} L${f(x2)},${f(bb)} C${f(mx)},${f(bb)} ` +
+                   `${f(mx)},${f(ab)} ${f(x1)},${f(ab)} Z`);
+    }
+    return parts.join(' ');
+}
+
 // ---- limits and counts ---------------------------------------------------
 
 // An amount, which may be a fraction, then a unit.
@@ -640,7 +666,7 @@ module.exports = {
     alignColumns, parseAmount, convert, quotas, fmtNum,
     splitText, mergeText,
     mergeIntoAbove, mergeIntoParent,
-    flowPath,
+    flowPath, threadPath,
     INDENT, splitFrontmatter, parseIndex, serialiseTree, writeIndexText,
     deriveLabel, stripComments, validPrefix, newId, makeNode, makeRoot,
     insertSibling, appendChild, moveWithin, indent, outdent, remove,

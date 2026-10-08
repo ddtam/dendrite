@@ -361,3 +361,24 @@ test('the flow is one path: a band per card and its group, joined', () => {
                  'the group is a rounded rectangle, clockwise');
     assert.equal(c.flowPath([]), '');
 });
+
+test('the thread runs card to card along the path', () => {
+    const d = c.threadPath([
+        { from: { left: 0, right: 100, top: 0, bottom: 60, r: 6 },
+          to: { left: 140, right: 240, top: 200, bottom: 280, r: 6 } },
+        { from: { left: 140, right: 240, top: 200, bottom: 280, r: 6 },
+          to: { left: 280, right: 380, top: 90, bottom: 130, r: 6 } },
+    ]);
+    const steps = d.split(' Z').filter((s) => s.trim());
+    assert.equal(steps.length, 2, 'one band per step');
+    assert.match(steps[0], /^M99,6 .* 141,206 L141,274 /,
+                 'from under the first card to under the second');
+});
+
+test('cards carry no content-visibility, which stopped clicks reaching ' +
+     'their footer', async () => {
+    const { readFileSync } = await import('node:fs');
+    const css = readFileSync(new URL('../styles.css', import.meta.url),
+                             'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    assert.doesNotMatch(css, /content-visibility/);
+});

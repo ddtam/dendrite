@@ -123,8 +123,12 @@
     display: flex;
     min-height: 0;
     background: var(--background-secondary);
-    --dendrite-flow: color-mix(in srgb, var(--interactive-accent) 14%,
+    /* Grey for the context, each path card's group of children; the
+       accent for the thread, the path itself. */
+    --dendrite-flow: color-mix(in srgb, var(--text-normal) 7%,
                                transparent);
+    --dendrite-thread: color-mix(in srgb, var(--interactive-accent) 32%,
+                                 transparent);
 }
 
 /* Drawn behind the board, which is transparent, so the opaque cards
@@ -139,8 +143,12 @@
     overflow: hidden;
 }
 
-.dendrite-flow path {
+.dendrite-flow .dendrite-flow-context {
     fill: var(--dendrite-flow);
+}
+
+.dendrite-flow .dendrite-flow-thread {
+    fill: var(--dendrite-thread);
 }
 
 .dendrite-board {
@@ -203,9 +211,9 @@
     padding: 10px 14px;
     cursor: pointer;
     transition: opacity 120ms ease, box-shadow 120ms ease;
-    /* Off-screen cards skip layout and paint until scrolled near. */
-    content-visibility: auto;
-    contain-intrinsic-size: auto 80px;
+    /* No content-visibility here: with it, the browser stopped delivering
+       clicks and hovers to the card's footer, measured 2026-10-08. Cards
+       are already rendered only as they near the screen. */
 }
 
 .dendrite-board.has-active .dendrite-card {
@@ -234,7 +242,6 @@
 
 .dendrite-card.is-editing {
     cursor: text;
-    content-visibility: visible;
 }
 
 .dendrite-card-body {

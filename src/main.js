@@ -489,21 +489,35 @@ class DendriteView extends ItemView {
                      r: parseFloat(getComputedStyle(el).borderTopLeftRadius)
                         || 0 };
         };
+        // Grey context: each card on the path opens into its whole group
+        // of children. Purple thread: each card on the path leads to the
+        // specific next card, ending at the active card.
         const pairs = [];
+        const steps = [];
         for (let n = node; n && n.id; n = n.parent) {
-            if (!n.children.length) continue;
             const card = this.cardEls.get(n.id);
+            if (!card) continue;
+            if (n.parent && n.parent.id) {
+                const up = this.cardEls.get(n.parent.id);
+                if (up) steps.push({ from: rel(up), to: rel(card) });
+            }
+            if (!n.children.length) continue;
             const child = this.cardEls.get(n.children[0].id);
             const group = child && child.parentElement;
-            if (!card || !group) continue;
+            if (!group) continue;
             group.classList.add('is-flow');
             pairs.push({ card: rel(card), group: rel(group) });
         }
-        if (!pairs.length) return;
         const NS = 'http://www.w3.org/2000/svg';
-        const path = document.createElementNS(NS, 'path');
-        path.setAttribute('d', core.flowPath(pairs));
-        svg.appendChild(path);
+        const draw = (cls, d) => {
+            if (!d) return;
+            const path = document.createElementNS(NS, 'path');
+            path.setAttribute('class', cls);
+            path.setAttribute('d', d);
+            svg.appendChild(path);
+        };
+        draw('dendrite-flow-context', core.flowPath(pairs));
+        draw('dendrite-flow-thread', core.threadPath(steps));
     }
 
     /**
