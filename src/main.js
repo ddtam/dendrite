@@ -31,11 +31,16 @@ const DEFAULTS = {
     openInDendrite: true,
     vimKeys: true,
     manageLinter: true,
+    lintCards: true,
     // The Linter ignore entry Dendrite added itself, if any, so that only
     // that entry is ever removed again.
     linterAdded: null,
 };
 const LINTER_ID = 'obsidian-linter';
+// Linter rules that break a card, switched off when Dendrite lints one.
+// "File name heading" inserts the card's ID as its heading, which then
+// becomes its label and an exported section heading.
+const CARD_UNSAFE_RULES = ['file-name-heading'];
 // A card note is `<prefix>-<5 characters>.md` inside a `cards` folder.
 const CARD_NAME = /^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*-[a-z0-9]{5}$/;
 const UNDO_DEPTH = 50;
@@ -685,6 +690,7 @@ class DendriteView extends ItemView {
         };
         ta.addEventListener('input', () => {
             ed.dirty = true;
+            ed.changed = true;
             fit();
             // A growing card stays centred while it is written in.
             this.centre(false);
@@ -737,6 +743,7 @@ class DendriteView extends ItemView {
         if (!ed) return;
         await this.save(ed);
         this.editing = null;
+        if (ed.changed) await this.plugin.lintCard(ed.file);
         this.invalidate(ed.id);
         const card = this.cardEls.get(ed.id);
         if (card) {
@@ -1411,6 +1418,14 @@ class DendriteSettings extends PluginSettingTab {
                 s.manageLinter = v;
                 save();
             }));
+        new Setting(containerEl).setName('Clean up cards with Linter')
+            .setDesc('When you leave a card you changed, run the Linter ' +
+                     'plugin\'s rules on it, except those that break ' +
+                     'cards, such as "File name heading".')
+            .addToggle((tg) => tg.setValue(s.lintCards).onChange((v) => {
+                s.lintCards = v;
+                save();
+            }));
         new Setting(containerEl).setName('Top section heading level')
             .setDesc('Export writes a top-level section card as this ' +
                      'heading level, deeper sections one level down each.')
@@ -1506,6 +1521,40 @@ module.exports = class DendritePlugin extends Plugin {
         await this.saveData(this.settings);
     }
 
+    linter() {
+        const p = this.app.plugins && this.app.plugins.plugins;
+        return (p && p[LINTER_ID]) || null;
+    }
+
+    /**
+     * Run Linter's clean-up on one card, as its lint on save would, with
+     * the rules that break cards switched off for that run only. Linter's
+     * own triggers skip the writing folder, so this is the only way a
+     * card is linted. It calls Linter's runLinterFile, which is not public
+     * API: if a Linter update removes it, cards are left unlinted.
+     */
+    async lintCard(file) {
+        const linter = this.linter();
+        if (!this.settings.lintCards || !linter) return;
+        if (linter.isEnabled === false) return;
+        if (typeof linter.runLinterFile !== 'function') return;
+        if (!linter.settings || !linter.settings.ruleConfigs) return;
+        const original = linter.settings;
+        const rules = Object.assign({}, original.ruleConfigs);
+        for (const id of CARD_UNSAFE_RULES) {
+            if (rules[id]) rules[id] = Object.assign({}, rules[id],
+                                                     { enabled: false });
+        }
+        linter.settings = Object.assign({}, original, { ruleConfigs: rules });
+        try {
+            await linter.runLinterFile(file);
+        } catch (err) {
+            console.error('Dendrite: Linter clean-up failed', err);
+        } finally {
+            linter.settings = original;
+        }
+    }
+
     /**
      * Keep the writing folder in Linter's folders to ignore, so Linter's
      * rules, "File name heading" above all, never rewrite a card. Only an
@@ -1513,8 +1562,7 @@ module.exports = class DendritePlugin extends Plugin {
      * object is changed, so the change applies without a reload.
      */
     async syncLinter() {
-        const linter = this.app.plugins && this.app.plugins.plugins &&
-            this.app.plugins.plugins[LINTER_ID];
+        const linter = this.linter();
         const ls = linter && linter.settings;
         if (!ls || !Array.isArray(ls.foldersToIgnore)) return;
         const want = this.settings.manageLinter ?

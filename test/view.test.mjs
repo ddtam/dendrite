@@ -22,7 +22,7 @@ async function open(indexText, cards = {}) {
     }
     const plugin = { settings: { headingTop: 1, cardWidth: 380,
                                  autosaveMs: 20, vimKeys: true },
-                     openAsMarkdown() {} };
+                     openAsMarkdown() {}, async lintCard() {} };
     const view = new DendriteView({ app, updateHeader() {},
                                     detach() {} }, plugin);
     await view.onOpen();
@@ -363,4 +363,38 @@ test('the Linter exemption is added once and only its own entry moves',
     none.app = { plugins: { plugins: {} } };
     none.settings = { writingFolder: 'Writing', manageLinter: true };
     await none.syncLinter();
+});
+
+test('a changed card is linted with the card-breaking rules off',
+     async () => {
+    const { view, app, read } = await open(
+        '---\ndendrite_prefix: G\n---\n- [[G-aaaaa|A]]\n', { 'G-aaaaa': 'A' });
+    const seen = [];
+    const linter = {
+        settings: { ruleConfigs: {
+            'file-name-heading': { enabled: true },
+            'emphasis-style': { enabled: true } }, foldersToIgnore: [] },
+        async runLinterFile(f) {
+            seen.push({ path: f.path, rules: this.settings.ruleConfigs });
+            await app.vault.modify(f, app.vault.text.get(f.path)
+                .replace(/_(\w+)_/g, '*$1*'));
+        },
+    };
+    app.plugins = { plugins: { 'obsidian-linter': linter } };
+    view.plugin = Object.assign(Object.create(
+        require('../src/main.js').prototype), { app,
+        settings: Object.assign({}, view.plugin.settings,
+                                { lintCards: true }) });
+    await view.startEdit('G-aaaaa');
+    await view.endEdit();
+    assert.equal(seen.length, 0, 'an unchanged card is not linted');
+    await view.startEdit('G-aaaaa');
+    type(view, 'An _emphasised_ word');
+    await view.endEdit();
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].rules['file-name-heading'].enabled, false);
+    assert.equal(seen[0].rules['emphasis-style'].enabled, true);
+    assert.equal(linter.settings.ruleConfigs['file-name-heading'].enabled,
+                 true, 'Linter\'s own settings are restored');
+    assert.equal(read(cardPath('G-aaaaa')), 'An *emphasised* word');
 });
