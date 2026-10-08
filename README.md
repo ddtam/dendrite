@@ -134,11 +134,11 @@ Set a card's role from its right-click menu; it is stored as `dendrite_role` (`s
 
 ## Card status
 
-A card's status describes its text, set on the cards that print it, as `dendrite_status`:
+A card's status describes its text, and every card that prints holds one, as `dendrite_status`, so each card says what it is without Dendrite; cards that do not print hold none. Opening a manuscript gives `draft` to any printing card without a status.
 
 | Status | Meaning |
 | --- | --- |
-| draft | written, not yet worked over (the default, written as no status) |
+| draft | written, not yet worked over (the default) |
 | done | "I like where this is; leave it" |
 | revise | needs another pass, from your own read or a reviewer's comment |
 | unsplit | set by Dendrite on a card whose text you started moving into children and left some behind |

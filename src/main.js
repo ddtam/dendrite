@@ -175,6 +175,9 @@ class DendriteView extends ItemView {
         const text = await this.app.vault.read(this.file);
         this.loadText(text);
         this.render();
+        // Backfill: a printing card with no status is given draft, so
+        // every card says what it is.
+        await this.sweepStatuses();
     }
 
     loadText(text) {
@@ -1095,9 +1098,8 @@ class DendriteView extends ItemView {
         const id = core.newId(prefix, (x) => this.taken(x));
         const made = await this.createCardFile(id, cut.moved);
         // The moved text is as mature as it was where it came from.
-        if (srcStatus && srcStatus !== 'draft') {
-            await writeProps(this.app, made, { dendrite_status: srcStatus });
-        }
+        await writeProps(this.app, made, {
+            dendrite_status: srcStatus || 'draft' });
         const fresh = core.makeNode(id, core.deriveLabel(cut.moved, null),
                                     null);
         if (where === 'child') core.appendChild(node, fresh);
@@ -1500,12 +1502,16 @@ class DendriteView extends ItemView {
         return core.STATUSES.includes(s) ? s : null;
     }
 
-    /** Write a status; draft is the default and is written as none. */
+    /**
+     * Write a status, draft included, so every printing card says what it
+     * is without Dendrite; null removes it, from a card that does not
+     * print.
+     */
     async setStatus(id, status) {
         const f = this.cardFile(id);
         if (!f) return;
-        await writeProps(this.app, f, {
-            dendrite_status: status && status !== 'draft' ? status : null });
+        if ((this.statusOf(id) || null) === (status || null)) return;
+        await writeProps(this.app, f, { dendrite_status: status || null });
     }
 
     /**
@@ -1572,11 +1578,14 @@ class DendriteView extends ItemView {
      */
     async sweepStatuses() {
         for (const n of core.allNodes(this.root)) {
+            if (!this.cardFile(n.id)) continue;
             const s = this.statusOf(n.id);
-            if (!s) continue;
             const prints = core.roleFor(n, (id) => this.roleOf(id)) ===
                 'prose';
-            if ((s === 'unsplit') === prints) {
+            if (prints && (!s || s === 'unsplit')) {
+                // Printing, with no status or a structural one: draft.
+                await this.setStatus(n.id, 'draft');
+            } else if (!prints && s && s !== 'unsplit') {
                 await this.setStatus(n.id, null);
             }
         }

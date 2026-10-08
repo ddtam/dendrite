@@ -1046,6 +1046,7 @@ var DendriteView = class extends ItemView {
     const text = await this.app.vault.read(this.file);
     this.loadText(text);
     this.render();
+    await this.sweepStatuses();
   }
   loadText(text) {
     const { body } = core.splitFrontmatter(text);
@@ -1978,9 +1979,9 @@ var DendriteView = class extends ItemView {
     const srcStatus = core.roleFor(node, (x) => this.roleOf(x)) === "prose" ? this.statusOf(ed.id) : null;
     const id = core.newId(prefix, (x) => this.taken(x));
     const made = await this.createCardFile(id, cut.moved);
-    if (srcStatus && srcStatus !== "draft") {
-      await writeProps(this.app, made, { dendrite_status: srcStatus });
-    }
+    await writeProps(this.app, made, {
+      dendrite_status: srcStatus || "draft"
+    });
     const fresh = core.makeNode(
       id,
       core.deriveLabel(cut.moved, null),
@@ -2357,13 +2358,16 @@ var DendriteView = class extends ItemView {
     const s = this.cardProps(id).dendrite_status;
     return core.STATUSES.includes(s) ? s : null;
   }
-  /** Write a status; draft is the default and is written as none. */
+  /**
+   * Write a status, draft included, so every printing card says what it
+   * is without Dendrite; null removes it, from a card that does not
+   * print.
+   */
   async setStatus(id, status) {
     const f = this.cardFile(id);
     if (!f) return;
-    await writeProps(this.app, f, {
-      dendrite_status: status && status !== "draft" ? status : null
-    });
+    if ((this.statusOf(id) || null) === (status || null)) return;
+    await writeProps(this.app, f, { dendrite_status: status || null });
   }
   /**
    * Show each card's status in its footer and the counts in the bar.
@@ -2429,10 +2433,12 @@ var DendriteView = class extends ItemView {
    */
   async sweepStatuses() {
     for (const n of core.allNodes(this.root)) {
+      if (!this.cardFile(n.id)) continue;
       const s = this.statusOf(n.id);
-      if (!s) continue;
       const prints = core.roleFor(n, (id) => this.roleOf(id)) === "prose";
-      if (s === "unsplit" === prints) {
+      if (prints && (!s || s === "unsplit")) {
+        await this.setStatus(n.id, "draft");
+      } else if (!prints && s && s !== "unsplit") {
         await this.setStatus(n.id, null);
       }
     }

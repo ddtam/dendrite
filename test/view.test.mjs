@@ -29,7 +29,15 @@ async function open(indexText, cards = {}) {
     await view.onOpen();
     await view.setState({ file: INDEX });
     await tick();
-    return { app, view, read: (p) => app.vault.text.get(p) };
+    const read = (p) => app.vault.text.get(p);
+    // A card's text without its properties, which Dendrite now writes on
+    // every printing card.
+    const text = (p) => {
+        const r = read(p);
+        return r === undefined ? r :
+            r.replace(/^---\n[\s\S]*?\n---\n/, '');
+    };
+    return { app, view, read, text };
 }
 
 const cardPath = (id) => `W/Grant/cards/${id}.md`;
@@ -41,13 +49,13 @@ const type = (view, value) => {
 
 test('first card: typed text reaches its note and labels the index',
      async () => {
-    const { view, read } = await open('---\ndendrite_prefix: G\n---\n');
+    const { view, read, text } = await open('---\ndendrite_prefix: G\n---\n');
     await view.insert('first');
     const id = view.active;
     assert.match(id, /^G-[a-z0-9]{5}$/);
     type(view, '# Specific Aims\nPlanning text.');
     await tick(60);
-    assert.equal(read(cardPath(id)), '# Specific Aims\nPlanning text.',
+    assert.equal(text(cardPath(id)), '# Specific Aims\nPlanning text.',
                  'autosave wrote the card');
     await view.endEdit();
     assert.equal(read(INDEX), '---\ndendrite_prefix: G\n---\n' +
@@ -56,17 +64,17 @@ test('first card: typed text reaches its note and labels the index',
 
 test('leaving the editor saves at once, before the autosave fires',
      async () => {
-    const { view, read } = await open('---\ndendrite_prefix: G\n---\n');
+    const { view, read, text } = await open('---\ndendrite_prefix: G\n---\n');
     view.plugin.settings.autosaveMs = 100000;
     await view.insert('first');
     const id = view.active;
     type(view, 'Never lost.');
     await view.endEdit();
-    assert.equal(read(cardPath(id)), 'Never lost.');
+    assert.equal(text(cardPath(id)), 'Never lost.');
 });
 
 test('a card\'s frontmatter survives editing its text', async () => {
-    const { view, read } = await open(
+    const { view, read, text } = await open(
         '---\ndendrite_prefix: G\n---\n- [[G-aaaaa|Old]]\n',
         { 'G-aaaaa': '---\naliases:\n  - Kept alias\n---\nOld text\n' });
     await view.startEdit('G-aaaaa');
@@ -75,13 +83,14 @@ test('a card\'s frontmatter survives editing its text', async () => {
     type(view, 'New text\n');
     await view.endEdit();
     assert.equal(read(cardPath('G-aaaaa')),
-                 '---\naliases:\n  - Kept alias\n---\nNew text\n');
+                 '---\naliases:\n  - Kept alias\ndendrite_status: draft\n' +
+                 '---\nNew text\n', 'the alias is kept beside the status');
     assert.match(read(INDEX), /\[\[G-aaaaa\|Kept alias\]\]/,
                  'the alias, not the first words, is the label');
 });
 
 test('insert below, child and above, then indent and outdent', async () => {
-    const { view, read } = await open(
+    const { view, read, text } = await open(
         '---\ndendrite_prefix: G\n---\n- [[G-aaaaa|A]]\n',
         { 'G-aaaaa': '# A\n' });
     view.active = 'G-aaaaa';
@@ -109,17 +118,17 @@ test('delete trashes the branch and undo restores notes and tree',
      async () => {
     const index = '---\ndendrite_prefix: G\n---\n' +
         '- [[G-aaaaa|A]]\n    - [[G-bbbbb|B]]\n- [[G-ccccc|C]]\n';
-    const { view, read } = await open(index, {
+    const { view, read, text } = await open(index, {
         'G-aaaaa': '# A\n', 'G-bbbbb': 'B text', 'G-ccccc': 'C text' });
     view.active = 'G-aaaaa';
     await view.deleteActive();
-    assert.equal(read(cardPath('G-aaaaa')), undefined);
-    assert.equal(read(cardPath('G-bbbbb')), undefined);
+    assert.equal(text(cardPath('G-aaaaa')), undefined);
+    assert.equal(text(cardPath('G-bbbbb')), undefined);
     assert.equal(read(INDEX), '---\ndendrite_prefix: G\n---\n' +
                  '- [[G-ccccc|C]]\n');
     assert.equal(view.active, 'G-ccccc');
     await view.doUndo();
-    assert.equal(read(cardPath('G-bbbbb')), 'B text');
+    assert.equal(text(cardPath('G-bbbbb')), 'B text');
     assert.equal(read(INDEX), index);
 });
 
@@ -147,7 +156,7 @@ test('an index edited outside Dendrite is re-read; its own writes are not',
 
 test('cards in cards/ that the index misses are offered for adoption',
      async () => {
-    const { view, read } = await open(
+    const { view, read, text } = await open(
         '---\ndendrite_prefix: G\n---\n- [[G-aaaaa|A]]\n',
         { 'G-aaaaa': 'A', 'G-zzzzz': '# Lost card' });
     assert.deepEqual(view.unlinkedCards().map((f) => f.basename),
@@ -157,7 +166,7 @@ test('cards in cards/ that the index misses are offered for adoption',
 });
 
 test('export writes the manuscript beside the index', async () => {
-    const { view, read } = await open(
+    const { view, read, text } = await open(
         '---\ndendrite_prefix: G\n---\n' +
         '- [[G-aaaaa|Aims]]\n    - [[G-bbbbb|p]]\n',
         { 'G-aaaaa': '# Aims\nplanning', 'G-bbbbb': 'Prose %%note%%here.' });
@@ -178,7 +187,7 @@ test('opening at a card makes it the active card', async () => {
 
 test('numbering shows on section cards and never enters their notes',
      async () => {
-    const { view, read } = await open(
+    const { view, read, text } = await open(
         '---\ndendrite_prefix: G\ndendrite_number_sections: true\n---\n' +
         '- [[G-aaaaa|Outline]]\n    - [[G-bbbbb|Sub]]\n' +
         '    - [[G-ccccc|p]]\n- [[G-ddddd|Methods]]\n',
@@ -194,7 +203,7 @@ test('numbering shows on section cards and never enters their notes',
     await view.structural('up');
     assert.equal(num('G-ddddd'), '1.');
     assert.equal(num('G-aaaaa'), '2.');
-    assert.equal(read(cardPath('G-aaaaa')), '# Outline',
+    assert.equal(text(cardPath('G-aaaaa')), '# Outline',
                  'the number is not written into the card');
     await view.exportTo(null);
     assert.equal(read('W/Grant/exports/Grant.md'),
@@ -203,7 +212,7 @@ test('numbering shows on section cards and never enters their notes',
 
 test('quotas show as a filled target, with details on hover and a quick ' +
      'editor on click', async () => {
-    const { view, app, read } = await open(
+    const { view, app, read, text } = await open(
         '---\ndendrite_prefix: G\ndendrite_limit: 1 page\n' +
         'dendrite_limit_required: true\ndendrite_words_per_page: 10\n---\n' +
         '- [[G-aaaaa|Aims]]\n    - [[G-bbbbb|p]]\n- [[G-ccccc|C]]\n',
@@ -249,11 +258,11 @@ test('quotas show as a filled target, with details on hover and a quick ' +
     [...document.querySelectorAll('.dendrite-quota-pop button')]
         .find((b) => b.textContent === 'Remove').click();
     await tick(10);
-    assert.equal(read(cardPath('G-ccccc')), 'C', 'quota removed');
+    assert.equal(text(cardPath('G-ccccc')), 'C', 'quota removed');
 });
 
 test('bold, tab and list enter edit the card and are saved', async () => {
-    const { view, read } = await open(
+    const { view, read, text } = await open(
         '---\ndendrite_prefix: G\n---\n- [[G-aaaaa|A]]\n',
         { 'G-aaaaa': '- point' });
     await view.startEdit('G-aaaaa');
@@ -267,7 +276,7 @@ test('bold, tab and list enter edit the card and are saved', async () => {
     view.editKey('indent');
     assert.equal(ta.value, '- **point**\n    - ');
     await view.endEdit();
-    assert.equal(read(cardPath('G-aaaaa')), '- **point**\n    - ');
+    assert.equal(text(cardPath('G-aaaaa')), '- **point**\n    - ');
     assert.equal(view.editKey('bold'), true,
                  'outside the editor the key goes through');
 });
@@ -297,7 +306,7 @@ test('the active path flows into each child group', async () => {
 
 test('vim keys move, insert, rearrange and delete in normal mode',
      async () => {
-    const { view, read } = await open(
+    const { view, read, text } = await open(
         '---\ndendrite_prefix: G\n---\n' +
         '- [[G-aaaaa|A]]\n    - [[G-bbbbb|B]]\n- [[G-ccccc|C]]\n',
         { 'G-aaaaa': 'A', 'G-bbbbb': 'B', 'G-ccccc': 'C' });
@@ -404,7 +413,7 @@ test('the Linter exemption is added once and only its own entry moves',
 
 test('a changed card is linted with the card-breaking rules off',
      async () => {
-    const { view, app, read } = await open(
+    const { view, app, read, text } = await open(
         '---\ndendrite_prefix: G\n---\n- [[G-aaaaa|A]]\n', { 'G-aaaaa': 'A' });
     const seen = [];
     const linter = {
@@ -435,19 +444,19 @@ test('a changed card is linted with the card-breaking rules off',
     assert.equal(seen[0].rules['emphasis-style'].enabled, true);
     assert.equal(linter.settings.ruleConfigs['file-name-heading'].enabled,
                  true, 'Linter\'s own settings are restored');
-    assert.equal(read(cardPath('G-aaaaa')), 'An *emphasised* word');
+    assert.equal(text(cardPath('G-aaaaa')), 'An *emphasised* word');
 });
 
 test('undoing a new card removes its note unless text was written',
      async () => {
-    const { view, read, app } = await open(
+    const { view, read, app, text } = await open(
         '---\ndendrite_prefix: G\n---\n- [[G-aaaaa|A]]\n', { 'G-aaaaa': 'A' });
     view.active = 'G-aaaaa';
     await view.insert('child');
     const blank = view.active;
     await view.endEdit();
     await view.doUndo();
-    assert.equal(read(cardPath(blank)), undefined, 'empty note removed');
+    assert.equal(text(cardPath(blank)), undefined, 'empty note removed');
     assert.deepEqual(view.unlinkedCards(), []);
     view.active = 'G-aaaaa';
     await view.insert('child');
@@ -455,12 +464,12 @@ test('undoing a new card removes its note unless text was written',
     type(view, 'Some words');
     await view.endEdit();
     await view.doUndo();
-    assert.equal(read(cardPath(kept)), 'Some words', 'text is never lost');
+    assert.equal(text(cardPath(kept)), 'Some words', 'text is never lost');
     assert.deepEqual(view.unlinkedCards().map((f) => f.basename), [kept]);
 });
 
 test('the orphan panel adds or deletes each unlinked note', async () => {
-    const { view, read } = await open(
+    const { view, read, text } = await open(
         '---\ndendrite_prefix: G\n---\n- [[G-aaaaa|A]]\n',
         { 'G-aaaaa': 'A', 'G-empty': '', 'G-words': 'Lost words' });
     await tick(20);
@@ -473,8 +482,8 @@ test('the orphan panel adds or deletes each unlinked note', async () => {
         .find((b) => b.textContent === 'Delete 1 empty');
     delEmpty.click();
     await tick(20);
-    assert.equal(read(cardPath('G-empty')), undefined);
-    assert.equal(read(cardPath('G-words')), 'Lost words');
+    assert.equal(text(cardPath('G-empty')), undefined);
+    assert.equal(text(cardPath('G-words')), 'Lost words');
     const panel2 = view.contentEl.querySelector('.dendrite-orphans');
     [...panel2.querySelectorAll('button')]
         .find((b) => b.textContent === 'Add').click();
@@ -553,7 +562,7 @@ test('Obsidian\'s editor: typing saves, Escape leaves, and it is torn down',
         }
         onunload() {}
     }
-    const { view, app, read } = await open(
+    const { view, app, read, text } = await open(
         '---\ndendrite_prefix: G\n---\n- [[G-aaaaa|A]]\n',
         { 'G-aaaaa': 'Start' });
     const scopes = [];
@@ -578,7 +587,7 @@ test('Obsidian\'s editor: typing saves, Escape leaves, and it is torn down',
         made.doc = 'Typed in Obsidian\'s editor';
         made.onUpdate({}, true);
         await tick(60);
-        assert.equal(read(cardPath('G-aaaaa')),
+        assert.equal(text(cardPath('G-aaaaa')),
                      'Typed in Obsidian\'s editor', 'autosaved');
         const esc = scopes[0].keys.find((k) => k.key === 'Escape');
         esc.fn();
@@ -627,18 +636,18 @@ test('arrow keys navigate from the pane even when no scope handles them',
 
 test('moving a selection to a new card below or a child, and undoing it',
      async () => {
-    const { view, read } = await open(
+    const { view, read, text } = await open(
         '---\ndendrite_prefix: G\n---\n- [[G-aaaaa|A]]\n- [[G-zzzzz|Z]]\n',
         { 'G-aaaaa': 'Keep this.\n\nMove this.\n\nAnd keep this.',
           'G-zzzzz': 'Z' });
     await view.startEdit('G-aaaaa');
     view.editing.ta.setSelectionRange(12, 22);
     await view.moveSelection('below');
-    assert.equal(read(cardPath('G-aaaaa')), 'Keep this.\n\nAnd keep this.');
+    assert.equal(text(cardPath('G-aaaaa')), 'Keep this.\n\nAnd keep this.');
     const ids = view.root.children.map((n) => n.id);
     assert.equal(ids.length, 3);
     const moved = ids[1];
-    assert.equal(read(cardPath(moved)), 'Move this.');
+    assert.equal(text(cardPath(moved)), 'Move this.');
     assert.match(read(INDEX), new RegExp(
         '- \\[\\[G-aaaaa\\|[^\\]]*\\]\\]\\n' +
         `- \\[\\[${moved}\\|Move this.\\]\\]`));
@@ -650,19 +659,19 @@ test('moving a selection to a new card below or a child, and undoing it',
                  '---\ndendrite_status: unsplit\n---\nKeep this.',
                  'text left behind after a split into a child: unsplit');
     const child = view.byId.get('G-aaaaa').children[0];
-    assert.equal(read(cardPath(child.id)), 'And keep this.');
+    assert.equal(text(cardPath(child.id)), 'And keep this.');
     await view.endEdit();
     await view.doUndo();
-    assert.equal(read(cardPath('G-aaaaa')), 'Keep this.\n\nAnd keep this.');
-    assert.equal(read(cardPath(child.id)), undefined, 'new card removed');
+    assert.equal(text(cardPath('G-aaaaa')), 'Keep this.\n\nAnd keep this.');
+    assert.equal(text(cardPath(child.id)), undefined, 'new card removed');
     // Text written into a moved card since is never discarded by undo.
     await view.startEdit(moved);
     type(view, 'Move this, revised.');
     await view.endEdit();
     await view.doUndo();
-    assert.equal(read(cardPath('G-aaaaa')),
+    assert.equal(text(cardPath('G-aaaaa')),
                  'Keep this.\n\nMove this.\n\nAnd keep this.');
-    assert.equal(read(cardPath(moved)), 'Move this, revised.',
+    assert.equal(text(cardPath(moved)), 'Move this, revised.',
                  'the edited new card is kept');
 });
 
@@ -670,26 +679,26 @@ test('merging into the card above or the parent, and undoing it',
      async () => {
     const index = '---\ndendrite_prefix: G\n---\n' +
         '- [[G-aaaaa|A]]\n- [[G-bbbbb|B]]\n    - [[G-ccccc|C]]\n';
-    const { view, read } = await open(index, {
+    const { view, read, text } = await open(index, {
         'G-aaaaa': 'Para A.', 'G-bbbbb': 'Para B.', 'G-ccccc': 'Para C.' });
     view.active = 'G-bbbbb';
     await view.merge('above');
-    assert.equal(read(cardPath('G-aaaaa')), 'Para A.\n\nPara B.');
-    assert.equal(read(cardPath('G-bbbbb')), undefined, 'merged note trashed');
+    assert.equal(text(cardPath('G-aaaaa')), 'Para A.\n\nPara B.');
+    assert.equal(text(cardPath('G-bbbbb')), undefined, 'merged note trashed');
     assert.equal(read(INDEX), '---\ndendrite_prefix: G\n---\n' +
                  '- [[G-aaaaa|Para A.]]\n    - [[G-ccccc|C]]\n',
                  'B\'s child follows its text');
     await view.doUndo();
-    assert.equal(read(cardPath('G-aaaaa')), 'Para A.');
-    assert.equal(read(cardPath('G-bbbbb')), 'Para B.');
+    assert.equal(text(cardPath('G-aaaaa')), 'Para A.');
+    assert.equal(text(cardPath('G-bbbbb')), 'Para B.');
     assert.equal(read(INDEX), index);
     view.active = 'G-ccccc';
     await view.merge('parent');
-    assert.equal(read(cardPath('G-bbbbb')), 'Para B.\n\nPara C.');
+    assert.equal(text(cardPath('G-bbbbb')), 'Para B.\n\nPara C.');
     assert.equal(view.byId.get('G-bbbbb').children.length, 0);
     view.active = 'G-aaaaa';
     await view.merge('above');
-    assert.equal(read(cardPath('G-aaaaa')), 'Para A.',
+    assert.equal(text(cardPath('G-aaaaa')), 'Para A.',
                  'nothing above the first card: unchanged');
 });
 
@@ -757,7 +766,7 @@ test('the preview prints by role, follows edits, and links to the board',
 
 test('card status: chips, tally, keys, and status moving with text',
      async () => {
-    const { view, read, app } = await open(
+    const { view, read, app, text } = await open(
         '---\ndendrite_prefix: G\n---\n' +
         '- [[G-aaaaa|Aims]]\n    - [[G-bbbbb|p1]]\n    - [[G-ccccc|p2]]\n' +
         '- [[G-ddddd|D]]\n',
@@ -825,7 +834,7 @@ test('card status: chips, tally, keys, and status moving with text',
 });
 
 test('merging keeps the less mature status', async () => {
-    const { view, read } = await open(
+    const { view, read, text } = await open(
         '---\ndendrite_prefix: G\n---\n- [[G-aaaaa|A]]\n- [[G-bbbbb|B]]\n',
         { 'G-aaaaa': '---\ndendrite_status: done\n---\nA.',
           'G-bbbbb': '---\ndendrite_status: revise\n---\nB.' });
@@ -859,4 +868,27 @@ test('settings are grouped under headings by what they affect', () => {
         '## Other plugins', 'Keep Linter out of the writing folder',
         'Clean up cards with Linter',
     ]);
+});
+
+test('every printing card holds its status; structural cards hold none',
+     async () => {
+    const { view, read } = await open(
+        '---\ndendrite_prefix: G\n---\n' +
+        '- [[G-aaaaa|S]]\n    - [[G-bbbbb|p]]\n- [[G-ccccc|N]]\n',
+        { 'G-aaaaa': '---\ndendrite_status: done\n---\n# S',
+          'G-bbbbb': 'Prose.',
+          'G-ccccc': '---\ndendrite_role: notes\n---\nNotes.' });
+    await tick(20);
+    assert.match(read(cardPath('G-bbbbb')), /dendrite_status: draft/,
+                 'backfilled on opening');
+    assert.doesNotMatch(read(cardPath('G-aaaaa')), /dendrite_status/,
+                        'a section holds no status');
+    assert.doesNotMatch(read(cardPath('G-ccccc')), /dendrite_status/,
+                        'a left-out card holds no status');
+    // A new card is written with draft.
+    view.active = 'G-bbbbb';
+    await view.insert('below');
+    const fresh = view.active;
+    await view.endEdit();
+    assert.match(read(cardPath(fresh)), /dendrite_status: draft/);
 });
