@@ -455,11 +455,12 @@ function alignColumns(cols, active, pos, heights) {
  * into are filled once where they overlap, never doubled. Each pair is a
  * card's box and the box of the group holding its children, in the SVG's
  * coordinates, each with its corner radius `r`. The band leaves the card
- * from the straight part of its right edge, tucked under it, and meets
- * the group at its full height, reaching in past its rounded left corners
- * so the band's edges run straight into the group's top and bottom edges
- * with no notch. All subpaths run clockwise, so the nonzero fill joins
- * them as one shape.
+ * from the straight part of its right edge, tucked under it, and arrives
+ * level at the group's top-left and bottom-left points, so its edges run
+ * straight on into the group's top and bottom edges. The group's left
+ * corners are square, since the band covers that whole edge; its right
+ * corners are rounded. All subpaths run clockwise, so the nonzero fill
+ * joins them as one shape.
  */
 function flowPath(pairs) {
     const f = (x) => Math.round(x * 10) / 10;
@@ -469,7 +470,7 @@ function flowPath(pairs) {
         const rb = Math.min(b.r || 0, (b.right - b.left) / 2,
                             (b.bottom - b.top) / 2);
         const x1 = a.right - 1;
-        const x2 = b.left + rb;
+        const x2 = b.left + 1;
         const at = a.top + ra;
         const ab = a.bottom - ra;
         const bt = b.top;
@@ -478,41 +479,37 @@ function flowPath(pairs) {
         parts.push(`M${f(x1)},${f(at)} C${f(mx)},${f(at)} ${f(mx)},${f(bt)} ` +
                    `${f(x2)},${f(bt)} L${f(x2)},${f(bb)} C${f(mx)},${f(bb)} ` +
                    `${f(mx)},${f(ab)} ${f(x1)},${f(ab)} Z`);
-        // The group, a rounded rectangle, clockwise from its top left.
+        // The group, clockwise from its top left: square on the left,
+        // where the band joins, rounded on the right.
         const [l, r, t, btm] = [b.left, b.right, b.top, b.bottom];
-        parts.push(`M${f(l + rb)},${f(t)} H${f(r - rb)} ` +
+        parts.push(`M${f(l)},${f(t)} H${f(r - rb)} ` +
                    `A${f(rb)},${f(rb)} 0 0 1 ${f(r)},${f(t + rb)} ` +
                    `V${f(btm - rb)} ` +
                    `A${f(rb)},${f(rb)} 0 0 1 ${f(r - rb)},${f(btm)} ` +
-                   `H${f(l + rb)} ` +
-                   `A${f(rb)},${f(rb)} 0 0 1 ${f(l)},${f(btm - rb)} ` +
-                   `V${f(t + rb)} ` +
-                   `A${f(rb)},${f(rb)} 0 0 1 ${f(l + rb)},${f(t)} Z`);
+                   `H${f(l)} Z`);
     }
     return parts.join(' ');
 }
 
 /**
- * The thread: one slim ribbon per step of the active card's path, from
- * the middle of a card's right edge to the middle of the left edge of the
- * specific card it leads to, so which card a card came from is
- * unambiguous however deep the path. Each pair is two card boxes. The
- * ribbon is `width` tall at each end, or less on a short card, and is
- * tucked under both cards.
+ * The thread: one ribbon per step of the active card's path, from a card
+ * to the specific card it leads to in the next column, so which card a
+ * card came from is unambiguous however deep the path. Each pair is two
+ * card boxes; each ribbon runs from the straight part of one card's right
+ * edge to the straight part of the next card's left edge, tucked under
+ * both.
  */
-function threadPath(pairs, width = 12) {
+function threadPath(pairs) {
     const f = (x) => Math.round(x * 10) / 10;
     const parts = [];
     for (const { from: a, to: b } of pairs) {
-        const ha = Math.min(width, a.bottom - a.top - 2 * (a.r || 0)) / 2;
-        const hb = Math.min(width, b.bottom - b.top - 2 * (b.r || 0)) / 2;
-        const ma = (a.top + a.bottom) / 2;
-        const mb = (b.top + b.bottom) / 2;
+        const ra = Math.min(a.r || 0, (a.bottom - a.top) / 2);
+        const rb = Math.min(b.r || 0, (b.bottom - b.top) / 2);
         const x1 = a.right - 1;
         const x2 = b.left + 1;
         const mx = (a.right + b.left) / 2;
-        const [at, ab] = [ma - Math.max(ha, 1), ma + Math.max(ha, 1)];
-        const [bt, bb] = [mb - Math.max(hb, 1), mb + Math.max(hb, 1)];
+        const [at, ab] = [a.top + ra, a.bottom - ra];
+        const [bt, bb] = [b.top + rb, b.bottom - rb];
         parts.push(`M${f(x1)},${f(at)} C${f(mx)},${f(at)} ${f(mx)},${f(bt)} ` +
                    `${f(x2)},${f(bt)} L${f(x2)},${f(bb)} C${f(mx)},${f(bb)} ` +
                    `${f(mx)},${f(ab)} ${f(x1)},${f(ab)} Z`);

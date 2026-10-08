@@ -338,7 +338,7 @@ var require_core = __commonJS({
           (b.bottom - b.top) / 2
         );
         const x1 = a.right - 1;
-        const x2 = b.left + rb;
+        const x2 = b.left + 1;
         const at = a.top + ra;
         const ab = a.bottom - ra;
         const bt = b.top;
@@ -346,23 +346,21 @@ var require_core = __commonJS({
         const mx = (a.right + b.left) / 2;
         parts.push(`M${f(x1)},${f(at)} C${f(mx)},${f(at)} ${f(mx)},${f(bt)} ${f(x2)},${f(bt)} L${f(x2)},${f(bb)} C${f(mx)},${f(bb)} ${f(mx)},${f(ab)} ${f(x1)},${f(ab)} Z`);
         const [l, r, t, btm] = [b.left, b.right, b.top, b.bottom];
-        parts.push(`M${f(l + rb)},${f(t)} H${f(r - rb)} A${f(rb)},${f(rb)} 0 0 1 ${f(r)},${f(t + rb)} V${f(btm - rb)} A${f(rb)},${f(rb)} 0 0 1 ${f(r - rb)},${f(btm)} H${f(l + rb)} A${f(rb)},${f(rb)} 0 0 1 ${f(l)},${f(btm - rb)} V${f(t + rb)} A${f(rb)},${f(rb)} 0 0 1 ${f(l + rb)},${f(t)} Z`);
+        parts.push(`M${f(l)},${f(t)} H${f(r - rb)} A${f(rb)},${f(rb)} 0 0 1 ${f(r)},${f(t + rb)} V${f(btm - rb)} A${f(rb)},${f(rb)} 0 0 1 ${f(r - rb)},${f(btm)} H${f(l)} Z`);
       }
       return parts.join(" ");
     }
-    function threadPath(pairs, width = 12) {
+    function threadPath(pairs) {
       const f = (x) => Math.round(x * 10) / 10;
       const parts = [];
       for (const { from: a, to: b } of pairs) {
-        const ha = Math.min(width, a.bottom - a.top - 2 * (a.r || 0)) / 2;
-        const hb = Math.min(width, b.bottom - b.top - 2 * (b.r || 0)) / 2;
-        const ma = (a.top + a.bottom) / 2;
-        const mb = (b.top + b.bottom) / 2;
+        const ra = Math.min(a.r || 0, (a.bottom - a.top) / 2);
+        const rb = Math.min(b.r || 0, (b.bottom - b.top) / 2);
         const x1 = a.right - 1;
         const x2 = b.left + 1;
         const mx = (a.right + b.left) / 2;
-        const [at, ab] = [ma - Math.max(ha, 1), ma + Math.max(ha, 1)];
-        const [bt, bb] = [mb - Math.max(hb, 1), mb + Math.max(hb, 1)];
+        const [at, ab] = [a.top + ra, a.bottom - ra];
+        const [bt, bb] = [b.top + rb, b.bottom - rb];
         parts.push(`M${f(x1)},${f(at)} C${f(mx)},${f(at)} ${f(mx)},${f(bt)} ${f(x2)},${f(bt)} L${f(x2)},${f(bb)} C${f(mx)},${f(bb)} ${f(mx)},${f(ab)} ${f(x1)},${f(ab)} Z`);
       }
       return parts.join(" ");

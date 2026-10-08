@@ -356,10 +356,11 @@ test('the flow is one path: a band per card and its group, joined', () => {
     assert.equal(subpaths.length, 2, 'the band and the group');
     assert.match(d, /^M99,46 /, 'leaves the card under its edge, ' +
                  'below its rounded corner');
-    assert.match(d, / 136,0 L136,300 /,
-                 'meets the group at its full height, past its corners');
-    assert.match(d, /M136,0 H224 A6,6 0 0 1 230,6 /,
-                 'the group is a rounded rectangle, clockwise');
+    assert.match(d, / 131,0 L131,300 /,
+                 'arrives level at the group\'s top-left and bottom-left');
+    assert.match(d, new RegExp('M130,0 H224 A6,6 0 0 1 230,6 V294 ' +
+                               'A6,6 0 0 1 224,300 H130 Z'),
+                 'the group is square on the left, rounded on the right');
     assert.equal(c.flowPath([]), '');
 });
 
@@ -372,9 +373,8 @@ test('the thread runs card to card along the path', () => {
     ]);
     const steps = d.split(' Z').filter((s) => s.trim());
     assert.equal(steps.length, 2, 'one band per step');
-    assert.match(steps[0], /^M99,24 .* 141,234 L141,246 /,
-                 'a 12px ribbon from the middle of one card\'s edge to ' +
-                 'the middle of the next');
+    assert.match(steps[0], /^M99,6 .* 141,206 L141,274 /,
+                 'from the straight part of one card\'s edge to the next');
 });
 
 test('cards carry no content-visibility, which stopped clicks reaching ' +
