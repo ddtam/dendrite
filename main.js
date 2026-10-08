@@ -215,35 +215,67 @@ var require_core = __commonJS({
       walk(root, 0);
       return cols;
     }
-    function exportMarkdown(nodes, bodyOf, headingTop, numbers) {
+    var ROLES = ["section", "prose", "notes"];
+    function roleFor(node, roleOf) {
+      const set = roleOf ? roleOf(node.id) : null;
+      if (ROLES.includes(set)) return set;
+      return node.children.length ? "section" : "prose";
+    }
+    function exportSegments(nodes, bodyOf, headingTop, numbers, roleOf) {
       const top = Math.max(1, Math.min(6, headingTop || 1));
-      const blocks = [];
-      let current = null;
-      const heading = (text, depth) => "#".repeat(Math.min(6, top + depth)) + " " + (numbers && numbers.has(current) ? numbers.get(current) + " " : "") + text;
+      const segs = [];
+      const heading = (id, text, depth) => "#".repeat(Math.min(6, top + depth)) + " " + (numbers && numbers.has(id) ? numbers.get(id) + " " : "") + text;
+      const comments = (raw) => (raw.match(/%%[\s\S]*?%%/g) || []).map((c) => c.slice(2, -2).trim()).filter(Boolean).join("\n\n");
+      const leftOut = (n, depth) => {
+        segs.push({
+          id: n.id,
+          depth,
+          text: "",
+          left: (bodyOf(n.id) || "").trim()
+        });
+        for (const c of n.children) leftOut(c, depth + 1);
+      };
       const walk = (node, depth) => {
-        current = node.id;
-        const body = stripComments(bodyOf(node.id) || "").trim();
+        const raw = bodyOf(node.id) || "";
+        const role = roleFor(node, roleOf);
+        if (role === "notes") {
+          leftOut(node, depth);
+          return;
+        }
+        const body = stripComments(raw).trim();
         const lines = body ? body.split("\n") : [];
         const h = lines.length ? HEADING.exec(lines[0].trim()) : null;
-        if (node.children.length) {
-          if (h) blocks.push(heading(h[2], depth));
-          for (const c of node.children) walk(c, depth + 1);
-        } else if (h) {
-          blocks.push(heading(h[2], depth));
-          const rest = lines.slice(1).join("\n").trim();
-          if (rest) blocks.push(rest);
-        } else if (body) {
-          blocks.push(body);
+        const rest = (h ? lines.slice(1) : lines).join("\n").trim();
+        const out = [];
+        if (h) out.push(heading(node.id, h[2], depth));
+        let left = comments(raw);
+        if (role === "prose") {
+          if (rest) out.push(rest);
+        } else if (rest) {
+          left = left ? rest + "\n\n" + left : rest;
         }
+        segs.push({ id: node.id, depth, text: out.join("\n\n"), left });
+        for (const c of node.children) walk(c, depth + 1);
       };
       for (const n of nodes) walk(n, 0);
+      return segs;
+    }
+    function exportMarkdown(nodes, bodyOf, headingTop, numbers, roleOf) {
+      const blocks = exportSegments(
+        nodes,
+        bodyOf,
+        headingTop,
+        numbers,
+        roleOf
+      ).map((s) => s.text).filter(Boolean);
       return blocks.join("\n\n") + (blocks.length ? "\n" : "");
     }
-    function sectionNumbers(roots, hasHeading) {
+    function sectionNumbers(roots, hasHeading, roleOf) {
       const out = /* @__PURE__ */ new Map();
       const walk = (nodes, prefix) => {
         let i = 0;
         for (const n of nodes) {
+          if (roleFor(n, roleOf) === "notes") continue;
           if (hasHeading(n.id)) {
             i += 1;
             const num = prefix ? `${prefix}.${i}` : String(i);
@@ -473,6 +505,9 @@ var require_core = __commonJS({
       mergeIntoParent,
       flowPath,
       threadPath,
+      exportSegments,
+      roleFor,
+      ROLES,
       INDENT,
       splitFrontmatter,
       parseIndex,
@@ -808,6 +843,7 @@ var core = require_core();
 var textedit = require_textedit();
 var { cardEditor } = require_editor();
 var VIEW = "dendrite-view";
+var PREVIEW = "dendrite-preview";
 var DEFAULTS = {
   writingFolder: "Writing",
   headingTop: 1,
@@ -1036,6 +1072,7 @@ var DendriteView = class extends ItemView {
     });
     this.applyActive(false);
     this.updateNumbers();
+    this.updateRoles();
     this.updateCounts();
   }
   renderBar(el) {
@@ -1074,6 +1111,7 @@ var DendriteView = class extends ItemView {
       "This manuscript's settings",
       () => new ManuscriptModal(this).open()
     );
+    btn("scroll-text", "Preview", "Show what export would print, beside the board", () => this.plugin.openPreview(this.file));
     this.totalEl = bar.createDiv({ cls: "dendrite-total" });
   }
   /**
@@ -1230,6 +1268,9 @@ var DendriteView = class extends ItemView {
       for (const d of core.descendants(node)) lineage.add(d.id);
     }
     this.lineage = lineage;
+    if (this.plugin.previewActive) {
+      this.plugin.previewActive(this.file, this.active);
+    }
     this.board.toggleClass("has-active", !!node);
     for (const [id, el] of this.cardEls) {
       el.toggleClass("is-active", id === this.active);
@@ -1390,6 +1431,24 @@ var DendriteView = class extends ItemView {
       "sliders-horizontal",
       () => new CardModal(this, this.active).open()
     );
+    m.addSeparator();
+    const id = this.active;
+    const role = this.roleOf(id);
+    const node = this.byId.get(id);
+    const auto = node && node.children.length ? "heading only" : "full text";
+    for (const [value, title, icon] of [
+      [null, `Prints automatically (${auto})`, "wand"],
+      ["section", "Prints its heading only", "heading"],
+      ["prose", "Prints its full text", "text"],
+      ["notes", "Left out of the manuscript", "eye-off"]
+    ]) {
+      m.addItem((i) => {
+        i.setTitle(title).setIcon(icon).onClick(() => this.setRole(id, value));
+        if (typeof i.setChecked === "function") {
+          i.setChecked(role === value);
+        }
+      });
+    }
     item(
       "Export this branch",
       "file-output",
@@ -2077,6 +2136,7 @@ var DendriteView = class extends ItemView {
     }
     if (!this.byId.has(f.basename)) return;
     this.updateNumbers();
+    this.updateRoles();
     this.scheduleCounts();
     if (this.editing && this.editing.id === f.basename) return;
     const body = core.splitFrontmatter(
@@ -2130,7 +2190,8 @@ var DendriteView = class extends ItemView {
     if (!this.manuscript().number) return /* @__PURE__ */ new Map();
     return core.sectionNumbers(
       this.root.children,
-      (id) => this.hasHeading(id)
+      (id) => this.hasHeading(id),
+      (id) => this.roleOf(id)
     );
   }
   /** Show each section card's number, updated in place. */
@@ -2160,6 +2221,34 @@ var DendriteView = class extends ItemView {
    * only when some limit is set, so a manuscript without limits pays
    * nothing for this.
    */
+  /** A card's role, if set: section, prose or notes. */
+  roleOf(id) {
+    const r = this.cardProps(id).dendrite_role;
+    return core.ROLES.includes(r) ? r : null;
+  }
+  async setRole(id, role) {
+    const f = this.cardFile(id);
+    if (f) await writeProps(this.app, f, { dendrite_role: role });
+  }
+  /** Mark cards that print nothing, and where a role was set by hand. */
+  updateRoles() {
+    for (const [id, card] of this.cardEls) {
+      const node = this.byId.get(id);
+      if (!node) continue;
+      let out = false;
+      for (let n = node; n && n.id; n = n.parent) {
+        if (core.roleFor(n, (x) => this.roleOf(x)) === "notes") {
+          out = true;
+          break;
+        }
+      }
+      card.toggleClass("is-left-out", out);
+      card.toggleClass(
+        "is-heading-only",
+        this.roleOf(id) === "section"
+      );
+    }
+  }
   /** A card's quota, with whether the call requires it. */
   quotaOf(id) {
     const fm = this.cardProps(id);
@@ -2189,7 +2278,13 @@ var DendriteView = class extends ItemView {
     const bodies = await this.loadBodies();
     const bodyOf = (id) => this.editing && this.editing.id === id ? this.editing.editor.value : bodies.get(id);
     const countOf = (nodes) => core.countText(
-      core.exportMarkdown(nodes, bodyOf, 1),
+      core.exportMarkdown(
+        nodes,
+        bodyOf,
+        1,
+        null,
+        (id) => this.roleOf(id)
+      ),
       ms.countSpaces
     );
     const total = ms.limit ? Object.assign(
@@ -2389,7 +2484,8 @@ var DendriteView = class extends ItemView {
       scope,
       (id) => bodies.get(id),
       ms.headingTop,
-      this.numbers()
+      this.numbers(),
+      (id) => this.roleOf(id)
     );
     const dir = normalizePath(
       (this.file.parent.path === "/" ? "" : this.file.parent.path + "/") + "exports"
@@ -2409,6 +2505,232 @@ var DendriteView = class extends ItemView {
     }
     await this.app.workspace.getLeaf("tab").openFile(out);
     new Notice(`Dendrite: exported to ${path}`);
+  }
+};
+var DendritePreview = class extends ItemView {
+  constructor(leaf, plugin) {
+    super(leaf);
+    this.plugin = plugin;
+    this.file = null;
+    this.showLeft = false;
+    this.blocks = /* @__PURE__ */ new Map();
+    this.segs = /* @__PURE__ */ new Map();
+    this.bodies = /* @__PURE__ */ new Map();
+    this.active = null;
+  }
+  getViewType() {
+    return PREVIEW;
+  }
+  getIcon() {
+    return "scroll-text";
+  }
+  getDisplayText() {
+    return this.file ? `Preview: ${this.file.basename}` : "Dendrite preview";
+  }
+  getState() {
+    return {
+      file: this.file ? this.file.path : null,
+      showLeft: this.showLeft
+    };
+  }
+  async setState(state, result) {
+    const f = state && state.file && this.app.vault.getAbstractFileByPath(state.file);
+    this.showLeft = !!(state && state.showLeft);
+    if (f instanceof TFile) {
+      this.file = f;
+      this.build();
+      await this.refresh();
+    }
+    return super.setState(state, result);
+  }
+  async onOpen() {
+    this.contentEl.addClass("dendrite-preview");
+    this.observer = new IntersectionObserver(
+      (entries) => this.onVisible(entries),
+      { root: null, rootMargin: "800px 0px" }
+    );
+    const changed = (f) => {
+      if (!(f instanceof TFile) || !this.file) return;
+      if (f === this.file || this.segs.has(f.basename)) {
+        this.scheduleRefresh();
+      }
+    };
+    this.registerEvent(this.app.vault.on("modify", changed));
+    this.registerEvent(this.app.metadataCache.on("changed", changed));
+    this.registerEvent(this.app.vault.on("rename", (f) => {
+      if (f === this.file) this.leaf.updateHeader();
+      else changed(f);
+    }));
+    this.registerDomEvent(this.contentEl, "click", (e) => {
+      const b = e.target.closest(".dendrite-pblock");
+      if (b && this.file) this.plugin.focusCard(
+        this.file,
+        b.dataset.id,
+        false
+      );
+    });
+    this.registerDomEvent(this.contentEl, "dblclick", (e) => {
+      const b = e.target.closest(".dendrite-pblock");
+      if (b && this.file) this.plugin.focusCard(
+        this.file,
+        b.dataset.id,
+        true
+      );
+    });
+  }
+  async onClose() {
+    if (this.observer) this.observer.disconnect();
+    for (const b of this.blocks.values()) {
+      if (b.comp) b.comp.unload();
+    }
+    this.blocks.clear();
+  }
+  build() {
+    const el = this.contentEl;
+    el.empty();
+    this.blocks.clear();
+    const bar = el.createDiv({ cls: "dendrite-bar" });
+    bar.createDiv({
+      cls: "dendrite-title",
+      text: this.file ? this.file.basename : ""
+    });
+    const toggle = bar.createEl("label", { cls: "dendrite-bar-btn" });
+    const box = toggle.createEl("input", { type: "checkbox" });
+    box.checked = this.showLeft;
+    toggle.createSpan({ text: "Show left out" });
+    toggle.setAttr("aria-label", "Also show, dimmed, the text that does not print: notes and comments");
+    box.addEventListener("change", () => {
+      this.showLeft = box.checked;
+      this.app.workspace.requestSaveLayout();
+      this.refresh();
+    });
+    this.doc = el.createDiv({ cls: "dendrite-preview-doc markdown-rendered" });
+  }
+  scheduleRefresh() {
+    clearTimeout(this.refreshTimer);
+    this.refreshTimer = setTimeout(() => this.refresh(), 300);
+  }
+  cardFile(id) {
+    const f = this.app.metadataCache.getFirstLinkpathDest(
+      id,
+      this.file.path
+    );
+    return f instanceof TFile ? f : null;
+  }
+  async refresh() {
+    if (!this.file || !this.doc) return;
+    const text = await this.app.vault.cachedRead(this.file);
+    const root = core.parseIndex(core.splitFrontmatter(text).body).root;
+    const fm = this.app.metadataCache.getFileCache(this.file)?.frontmatter || {};
+    const top = Number(fm.dendrite_heading_top);
+    const headingTop = top >= 1 && top <= 6 ? top : this.plugin.settings.headingTop;
+    for (const n of core.allNodes(root)) {
+      const f = this.cardFile(n.id);
+      if (!f) continue;
+      const had = this.bodies.get(n.id);
+      if (had && had.mtime === f.stat.mtime) continue;
+      this.bodies.set(n.id, { mtime: f.stat.mtime, body: core.splitFrontmatter(await this.app.vault.cachedRead(f)).body });
+    }
+    const props = (id) => {
+      const f = this.cardFile(id);
+      return f && this.app.metadataCache.getFileCache(f)?.frontmatter || {};
+    };
+    const roleOf = (id) => {
+      const r = props(id).dendrite_role;
+      return core.ROLES.includes(r) ? r : null;
+    };
+    const hasHeading = (id) => {
+      const f = this.cardFile(id);
+      const s = f && this.app.metadataCache.getFileCache(f)?.sections;
+      const first = (s || []).find((x) => x.type !== "yaml");
+      return !!first && first.type === "heading";
+    };
+    const numbers = fm.dendrite_number_sections === true ? core.sectionNumbers(root.children, hasHeading, roleOf) : null;
+    const segs = core.exportSegments(root.children, (id) => {
+      const b = this.bodies.get(id);
+      return b ? b.body : "";
+    }, headingTop, numbers, roleOf);
+    this.renderSegments(segs);
+  }
+  renderSegments(segs) {
+    this.segs = new Map(segs.map((s) => [s.id, s]));
+    for (const [id, b] of this.blocks) {
+      if (!this.segs.has(id)) {
+        if (b.comp) b.comp.unload();
+        b.el.remove();
+        this.blocks.delete(id);
+      }
+    }
+    for (const s of segs) {
+      const key = s.text + "\0" + (this.showLeft ? s.left : "");
+      let b = this.blocks.get(s.id);
+      if (!b) {
+        const el = createDiv({ cls: "dendrite-pblock" });
+        el.dataset.id = s.id;
+        b = { el, key: null, comp: null };
+        this.blocks.set(s.id, b);
+      }
+      const empty = !s.text && !(this.showLeft && s.left);
+      b.el.toggleClass("is-empty", empty);
+      b.el.toggleClass("is-left-out-only", !s.text);
+      if (b.key !== key) {
+        b.key = key;
+        b.el.addClass("is-pending");
+        if (this.observer && !empty) this.observer.observe(b.el);
+      }
+      b.el.toggleClass("is-active", s.id === this.active);
+      this.doc.appendChild(b.el);
+    }
+  }
+  onVisible(entries) {
+    for (const e of entries) {
+      if (!e.isIntersecting) continue;
+      this.observer.unobserve(e.target);
+      if (e.target.hasClass("is-pending")) {
+        this.renderBlock(e.target.dataset.id);
+      }
+    }
+  }
+  async renderBlock(id) {
+    const b = this.blocks.get(id);
+    const s = this.segs.get(id);
+    if (!b || !s) return;
+    b.el.removeClass("is-pending");
+    if (b.comp) b.comp.unload();
+    b.comp = new Component();
+    b.comp.load();
+    b.el.empty();
+    const f = this.cardFile(id);
+    const path = f ? f.path : this.file.path;
+    if (s.text) {
+      await MarkdownRenderer.render(
+        this.app,
+        s.text,
+        b.el.createDiv(),
+        path,
+        b.comp
+      );
+    }
+    if (this.showLeft && s.left) {
+      await MarkdownRenderer.render(
+        this.app,
+        s.left,
+        b.el.createDiv({ cls: "dendrite-left-out" }),
+        path,
+        b.comp
+      );
+    }
+  }
+  /** Highlight the board's active card here, and bring it into view. */
+  highlight(id) {
+    this.active = id;
+    for (const [bid, b2] of this.blocks) {
+      b2.el.toggleClass("is-active", bid === id);
+    }
+    const b = this.blocks.get(id);
+    if (b && b.el.scrollIntoView) {
+      b.el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
   }
 };
 function quotaSetting(container, name, desc, current, required, draft) {
@@ -2615,6 +2937,20 @@ module.exports = class DendritePlugin extends Plugin {
   async onload() {
     this.settings = Object.assign({}, DEFAULTS, await this.loadData());
     this.registerView(VIEW, (leaf) => new DendriteView(leaf, this));
+    this.registerView(PREVIEW, (leaf) => new DendritePreview(leaf, this));
+    this.addCommand({
+      id: "open-preview",
+      name: "Open the manuscript preview",
+      checkCallback: (checking) => {
+        const v = this.app.workspace.getActiveViewOfType(
+          DendriteView
+        );
+        const f = v ? v.file : this.app.workspace.getActiveFile();
+        if (!f || !isIndex(this.app, f)) return false;
+        if (!checking) this.openPreview(f);
+        return true;
+      }
+    });
     this.addSettingTab(new DendriteSettings(this.app, this));
     this.addRibbonIcon("list-tree", "Open in Dendrite", () => {
       const f = this.app.workspace.getActiveFile();
@@ -2791,6 +3127,37 @@ module.exports = class DendritePlugin extends Plugin {
     });
     this.app.workspace.revealLeaf(target);
   }
+  /** The preview for a manuscript, opened beside the board or reused. */
+  async openPreview(file) {
+    const open = this.app.workspace.getLeavesOfType(PREVIEW).find((l) => l.view.file === file);
+    if (open) {
+      this.app.workspace.revealLeaf(open);
+      return;
+    }
+    const leaf = this.app.workspace.getLeaf("split", "vertical");
+    await leaf.setViewState({
+      type: PREVIEW,
+      active: false,
+      state: { file: file.path }
+    });
+  }
+  /** From the preview: select a card on the board, or edit it. */
+  async focusCard(file, id, edit) {
+    const leaf = this.app.workspace.getLeavesOfType(VIEW).find((l) => l.view.file === file);
+    if (!leaf) {
+      await this.openIndex(file, id);
+      return;
+    }
+    this.app.workspace.revealLeaf(leaf);
+    const view = leaf.view;
+    if (edit) await view.startEdit(id);
+    else await view.select(id);
+  }
+  previewActive(file, id) {
+    for (const l of this.app.workspace.getLeavesOfType(PREVIEW)) {
+      if (l.view.file === file) l.view.highlight(id);
+    }
+  }
   async openAsMarkdown(file) {
     const leaf = this.app.workspace.getLeaf("tab");
     this.markdownLeaves.set(leaf, file.path);
@@ -2900,3 +3267,4 @@ dendrite_prefix: ${prefix}
 };
 module.exports.core = core;
 module.exports.DendriteView = DendriteView;
+module.exports.DendritePreview = DendritePreview;

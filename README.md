@@ -120,13 +120,25 @@ Linter's clean-up still reaches cards, through Dendrite: when you leave a card y
 
 The index shows each card by a label: the card's heading line if it starts with one, else the first of its `aliases`, else its first words. Dendrite keeps the index's labels in step with the cards, so edit a label in the card, not in the index.
 
+## What prints: card roles
+
+Each card has a role, which decides what of it prints:
+
+| Role | Prints | Default for |
+| --- | --- | --- |
+| Heading only | its heading line; the rest of its text is notes | a card with children |
+| Full text | its heading, if any, and its text | a card without children |
+| Left out | nothing from the card or its branch | never by default |
+
+Set a card's role from its right-click menu; it is stored as `dendrite_role` (`section`, `prose` or `notes`) on the card. An outline card in the first column, holding a heading and your notes, is set to **Heading only** so its notes stay out even before it has children. A left-out card shows with a dashed outline; a heading-only card shows its notes muted. `%% comments %%` never print.
+
+## Preview
+
+**Preview** in the bar opens the manuscript as export would print it, beside the board, updating as cards save. Each card's part is its own block: click one to select that card on the board, double-click to edit it, and the board's active card is highlighted in the preview. **Show left out** also shows, dimmed, the text that does not print, so you can check what your roles leave out. Editing stays in the cards, since the printed text is transformed (headings levelled and numbered, notes and comments dropped).
+
 ## Export
 
-**Export** in the view's toolbar, or **Export this branch** in a card's menu, writes markdown to `exports/` beside the index:
-
-- **A card with children is a section.** Its heading line becomes a heading at the level its depth gives. Its other text is planning and is left out.
-- **A card with no children is prose** and is exported whole.
-- **`%% comments %%` are left out** everywhere, so planning can sit beside prose.
+**Export** in the view's toolbar, or **Export this branch** in a card's menu, writes markdown to `exports/` beside the index: what the preview shows, with headings levelled by each card's depth.
 
 ## Development
 

@@ -290,50 +290,96 @@ function columns(root) {
 // ---- export ---------------------------------------------------------------
 
 /**
- * Assemble a manuscript. A card with children is a section: its heading
- * line is exported at the level its depth gives, and its other text is
- * planning and is dropped. A card with no children is prose and is
- * exported whole, its own heading line, if any, re-levelled the same way.
- * Comments are dropped everywhere. `bodyOf(id)` returns a card's body.
+ * What a card prints, by its role. A card's role is set in its
+ * `dendrite_role` property or follows from its place in the tree:
+ *
+ *   section  its heading line prints; the rest of its text is notes
+ *   prose    its heading line, if any, and its text print
+ *   notes    nothing from the card or its branch prints
+ *
+ * With no role set, a card with children is a section and a card without
+ * them is prose. `roleOf(id)` returns the set role or null.
  */
-function exportMarkdown(nodes, bodyOf, headingTop, numbers) {
+const ROLES = ['section', 'prose', 'notes'];
+
+function roleFor(node, roleOf) {
+    const set = roleOf ? roleOf(node.id) : null;
+    if (ROLES.includes(set)) return set;
+    return node.children.length ? 'section' : 'prose';
+}
+
+/**
+ * The manuscript as one segment per card, in reading order:
+ * { id, depth, text, left }, where `text` is the markdown the card prints
+ * and `left` the part of its text that does not print (its notes and
+ * comments), for a preview that can show both. Headings are levelled by
+ * depth below `headingTop` and numbered from `numbers` when given.
+ */
+function exportSegments(nodes, bodyOf, headingTop, numbers, roleOf) {
     const top = Math.max(1, Math.min(6, headingTop || 1));
-    const blocks = [];
-    let current = null;
-    const heading = (text, depth) => '#'.repeat(Math.min(6, top + depth)) +
-        ' ' + (numbers && numbers.has(current) ?
-            numbers.get(current) + ' ' : '') + text;
+    const segs = [];
+    const heading = (id, text, depth) => '#'.repeat(Math.min(6, top + depth)) +
+        ' ' + (numbers && numbers.has(id) ? numbers.get(id) + ' ' : '') +
+        text;
+    const comments = (raw) => (raw.match(/%%[\s\S]*?%%/g) || [])
+        .map((c) => c.slice(2, -2).trim()).filter(Boolean).join('\n\n');
+    const leftOut = (n, depth) => {
+        segs.push({ id: n.id, depth, text: '',
+                    left: (bodyOf(n.id) || '').trim() });
+        for (const c of n.children) leftOut(c, depth + 1);
+    };
     const walk = (node, depth) => {
-        current = node.id;
-        const body = stripComments(bodyOf(node.id) || '').trim();
+        const raw = bodyOf(node.id) || '';
+        const role = roleFor(node, roleOf);
+        if (role === 'notes') {
+            leftOut(node, depth);
+            return;
+        }
+        const body = stripComments(raw).trim();
         const lines = body ? body.split('\n') : [];
         const h = lines.length ? HEADING.exec(lines[0].trim()) : null;
-        if (node.children.length) {
-            if (h) blocks.push(heading(h[2], depth));
-            for (const c of node.children) walk(c, depth + 1);
-        } else if (h) {
-            blocks.push(heading(h[2], depth));
-            const rest = lines.slice(1).join('\n').trim();
-            if (rest) blocks.push(rest);
-        } else if (body) {
-            blocks.push(body);
+        const rest = (h ? lines.slice(1) : lines).join('\n').trim();
+        const out = [];
+        if (h) out.push(heading(node.id, h[2], depth));
+        let left = comments(raw);
+        if (role === 'prose') {
+            if (rest) out.push(rest);
+        } else if (rest) {
+            left = left ? rest + '\n\n' + left : rest;
         }
+        segs.push({ id: node.id, depth, text: out.join('\n\n'), left });
+        for (const c of node.children) walk(c, depth + 1);
     };
     for (const n of nodes) walk(n, 0);
+    return segs;
+}
+
+/**
+ * Assemble a manuscript: every card's printed text, in reading order, by
+ * the roles above. Comments are dropped everywhere. `bodyOf(id)` returns a
+ * card's body.
+ */
+function exportMarkdown(nodes, bodyOf, headingTop, numbers, roleOf) {
+    const blocks = exportSegments(nodes, bodyOf, headingTop, numbers,
+                                  roleOf).map((s) => s.text).filter(Boolean);
     return blocks.join('\n\n') + (blocks.length ? '\n' : '');
 }
 
 /**
  * Section numbers by position, as LaTeX numbers them: every card whose
  * text opens with a heading is numbered among its siblings that do, so
- * moving a section renumbers it. `hasHeading(id)` says which cards do.
+ * moving a section renumbers it. `hasHeading(id)` says which cards do;
+ * a card whose role is notes, and its branch, are not numbered.
  * Returns id -> `1.`, `1.2` and so on.
  */
-function sectionNumbers(roots, hasHeading) {
+function sectionNumbers(roots, hasHeading, roleOf) {
     const out = new Map();
     const walk = (nodes, prefix) => {
         let i = 0;
         for (const n of nodes) {
+            // A card left out of the manuscript takes no number, and
+            // neither does anything in its branch.
+            if (roleFor(n, roleOf) === 'notes') continue;
             if (hasHeading(n.id)) {
                 i += 1;
                 const num = prefix ? `${prefix}.${i}` : String(i);
@@ -667,7 +713,7 @@ module.exports = {
     alignColumns, parseAmount, convert, quotas, fmtNum,
     splitText, mergeText,
     mergeIntoAbove, mergeIntoParent,
-    flowPath, threadPath,
+    flowPath, threadPath, exportSegments, roleFor, ROLES,
     INDENT, splitFrontmatter, parseIndex, serialiseTree, writeIndexText,
     deriveLabel, stripComments, validPrefix, newId, makeNode, makeRoot,
     insertSibling, appendChild, moveWithin, indent, outdent, remove,

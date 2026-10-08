@@ -384,3 +384,56 @@ test('cards carry no content-visibility, which stopped clicks reaching ' +
                              'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
     assert.doesNotMatch(css, /content-visibility/);
 });
+
+test('roles decide what a card prints, and segments show what is left out',
+     () => {
+    // Outline (no children yet, but marked a section), Aims (section by
+    // having a child), its prose child, and a notes card with a child.
+    const root = c.makeRoot();
+    const mk = (id, parent) => {
+        const n = c.makeNode(id, id, null);
+        c.appendChild(parent, n);
+        return n;
+    };
+    mk('O', root);
+    const a = mk('A', root);
+    mk('P', a);
+    const nb = mk('N', root);
+    mk('Q', nb);
+    const bodies = {
+        O: '# Research outline\nWhat will be done, not why.',
+        A: '# Aims\nTwo aims. %% check the call %%',
+        P: 'Prose for the aims.',
+        N: '# Reviewer notes\nFix the budget.',
+        Q: 'Under the notes.',
+    };
+    const roles = { O: 'section', N: 'notes' };
+    const roleOf = (id) => roles[id] || null;
+    const out = c.exportMarkdown(root.children, (id) => bodies[id], 1, null,
+                                 roleOf);
+    assert.equal(out, '# Research outline\n\n# Aims\n\n' +
+                 'Prose for the aims.\n',
+                 'an outline card prints its heading only, a notes card ' +
+                 'and its branch print nothing');
+    const segs = c.exportSegments(root.children, (id) => bodies[id], 1, null,
+                                  roleOf);
+    const by = Object.fromEntries(segs.map((s) => [s.id, s]));
+    assert.deepEqual(segs.map((s) => s.id), ['O', 'A', 'P', 'N', 'Q'],
+                     'every card has a segment, in reading order');
+    assert.equal(by.O.left, 'What will be done, not why.');
+    assert.equal(by.A.left, 'Two aims.\n\ncheck the call',
+                 'notes then comments');
+    assert.equal(by.P.left, '');
+    assert.equal(by.N.text, '');
+    assert.equal(by.N.left, '# Reviewer notes\nFix the budget.');
+    assert.equal(by.Q.left, 'Under the notes.');
+    // Without roles, an outline card with no children is prose.
+    assert.match(c.exportMarkdown([root.children[0]], (id) => bodies[id], 1),
+                 /What will be done/);
+    // A notes card takes no section number.
+    const nums = c.sectionNumbers(root.children, (id) => /^#/.test(bodies[id]),
+                                  roleOf);
+    assert.equal(nums.get('O'), '1.');
+    assert.equal(nums.get('A'), '2.');
+    assert.equal(nums.has('N'), false);
+});

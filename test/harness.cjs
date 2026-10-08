@@ -201,6 +201,7 @@ function makeApp() {
             getActiveFile() { return null; },
             on() { return {}; },
             getLeavesOfType() { return []; },
+            requestSaveLayout() {},
             openLinkText() {},
         },
         opened,

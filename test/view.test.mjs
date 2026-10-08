@@ -701,3 +701,53 @@ test('the quota and the active card\'s tools share one footer row',
     assert.equal(foot.firstElementChild.className.split(' ')[0],
                  'dendrite-quota');
 });
+
+test('the preview prints by role, follows edits, and links to the board',
+     async () => {
+    const { DendritePreview } = require('../src/main.js');
+    const app = h.makeApp();
+    app.vault.folders.add('W/Grant/cards');
+    await app.vault.create(INDEX, '---\ndendrite_prefix: G\n' +
+        'dendrite_number_sections: true\n---\n' +
+        '- [[G-aaaaa|Outline]]\n- [[G-bbbbb|Aims]]\n    - [[G-ccccc|p]]\n');
+    const card = (id, text) => app.vault.create(cardPath(id), text);
+    await card('G-aaaaa', '---\ndendrite_role: section\n---\n' +
+               '# Research outline\nMy notes on what to do.');
+    await card('G-bbbbb', '# Aims\nPlanning.');
+    await card('G-ccccc', 'The aims prose. %% check %%');
+    const focused = [];
+    const plugin = { settings: { headingTop: 1 },
+                     focusCard: (f, id, edit) => focused.push([id, edit]) };
+    const view = new DendritePreview({ app, updateHeader() {} }, plugin);
+    await view.onOpen();
+    await view.setState({ file: INDEX });
+    await tick(20);
+    const blocks = () => [...view.contentEl.querySelectorAll(
+        '.dendrite-pblock')].filter((b) => !b.hasClass('is-empty'));
+    const texts = () => blocks().map((b) => b.textContent);
+    assert.deepEqual(texts(), ['# 1. Research outline', '# 2. Aims',
+                               'The aims prose.'],
+                     'headings numbered, notes and comments left out');
+    // Show left out: the notes appear, dimmed, in their own element.
+    const box = view.contentEl.querySelector('input[type=checkbox]');
+    box.checked = true;
+    box.dispatchEvent(new h.window.Event('change'));
+    await tick(20);
+    const left = [...view.contentEl.querySelectorAll('.dendrite-left-out')]
+        .map((e) => e.textContent);
+    assert.deepEqual(left, ['My notes on what to do.', 'Planning.', 'check']);
+    // An edit to a card reaches the preview.
+    await app.vault.modify(app.vault.getAbstractFileByPath(
+        cardPath('G-ccccc')), 'Revised aims prose.');
+    await view.refresh();
+    await tick(20);
+    assert.match(texts().join('|'), /Revised aims prose\./);
+    // Click selects the card on the board; double-click edits it.
+    const b = view.blocks.get('G-bbbbb').el;
+    b.dispatchEvent(new h.window.MouseEvent('click', { bubbles: true }));
+    b.dispatchEvent(new h.window.MouseEvent('dblclick', { bubbles: true }));
+    assert.deepEqual(focused, [['G-bbbbb', false], ['G-bbbbb', true]]);
+    view.highlight('G-ccccc');
+    assert.ok(view.blocks.get('G-ccccc').el.hasClass('is-active'));
+    assert.ok(!b.hasClass('is-active'));
+});
