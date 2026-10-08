@@ -3155,44 +3155,49 @@ var DendriteSettings = class extends PluginSettingTab {
     const s = this.plugin.settings;
     containerEl.empty();
     const save = () => this.plugin.saveSettings();
+    const heading = (name) => new Setting(containerEl).setName(name).setHeading();
+    heading("Manuscripts");
     new Setting(containerEl).setName("Writing folder").setDesc("Where new manuscripts are created, one folder each.").addText((t) => t.setValue(s.writingFolder).onChange((v) => {
       s.writingFolder = v.trim();
       save();
     }));
-    new Setting(containerEl).setName("Keep Linter out of the writing folder").setDesc("Adds the writing folder to the Linter plugin's folders to ignore, so its rules never rewrite a card. Off removes the entry, if Dendrite added it.").addToggle((tg) => tg.setValue(s.manageLinter).onChange((v) => {
-      s.manageLinter = v;
+    new Setting(containerEl).setName("Open index notes in Dendrite").setDesc("Opening an index note shows it in Dendrite. Its markdown stays one button away in the view.").addToggle((tg) => tg.setValue(s.openInDendrite).onChange((v) => {
+      s.openInDendrite = v;
       save();
     }));
-    new Setting(containerEl).setName("Clean up cards with Linter").setDesc(`When you leave a card you changed, run the Linter plugin's rules on it, except those that break cards, such as "File name heading".`).addToggle((tg) => tg.setValue(s.lintCards).onChange((v) => {
-      s.lintCards = v;
-      save();
-    }));
-    new Setting(containerEl).setName("Use Obsidian's editor in cards").setDesc("Live preview, link and citation suggestions, and editor commands inside a card. Off, or if Obsidian's editor cannot start, cards use a plain text box.").addToggle((tg) => tg.setValue(s.obsidianEditor).onChange((v) => {
-      s.obsidianEditor = v;
-      save();
-    }));
-    new Setting(containerEl).setName("Top section heading level").setDesc("Export writes a top-level section card as this heading level, deeper sections one level down each.").addDropdown((d) => {
+    new Setting(containerEl).setName("Top section heading level").setDesc("Export writes a top-level section card as this heading level, deeper sections one level down each. A manuscript can set its own in its Settings.").addDropdown((d) => {
       for (let i = 1; i <= 4; i++) d.addOption(String(i), "H" + i);
       d.setValue(String(s.headingTop)).onChange((v) => {
         s.headingTop = Number(v);
         save();
       });
     });
+    heading("Board");
     new Setting(containerEl).setName("Card width").setDesc("In pixels.").addSlider((sl) => sl.setLimits(260, 640, 20).setValue(s.cardWidth).setDynamicTooltip().onChange((v) => {
       s.cardWidth = v;
       save();
       this.plugin.rerender();
     }));
-    new Setting(containerEl).setName("Open index notes in Dendrite").setDesc("Opening an index note shows it in Dendrite. Its markdown stays one button away in the view.").addToggle((tg) => tg.setValue(s.openInDendrite).onChange((v) => {
-      s.openInDendrite = v;
-      save();
-    }));
-    new Setting(containerEl).setName("Vim-style keys").setDesc("In normal mode: h j k l to move, i or a to edit, o and O for a new card below or above, n for a child, J and K to move a card, > and < to indent, dd to delete, u to undo, gg and G for the column's ends.").addToggle((tg) => tg.setValue(s.vimKeys).onChange((v) => {
+    new Setting(containerEl).setName("Vim-style keys").setDesc("In normal mode: h j k l to move, i or a to edit, o and O for a new card below or above, n for a child, J and K to move a card, > and < to indent, dd to delete, u to undo, gg and G for the column's ends. Arrows, + - ] and [ work either way.").addToggle((tg) => tg.setValue(s.vimKeys).onChange((v) => {
       s.vimKeys = v;
       save();
     }));
-    new Setting(containerEl).setName("Autosave delay").setDesc("Milliseconds after the last keystroke before a card is written to its note.").addSlider((sl) => sl.setLimits(200, 3e3, 100).setValue(s.autosaveMs).setDynamicTooltip().onChange((v) => {
+    heading("Writing in cards");
+    new Setting(containerEl).setName("Use Obsidian's editor in cards").setDesc("Live preview, link and citation suggestions, and editor commands inside a card. Off, or if Obsidian's editor cannot start, cards use a plain text box.").addToggle((tg) => tg.setValue(s.obsidianEditor).onChange((v) => {
+      s.obsidianEditor = v;
+      save();
+    }));
+    new Setting(containerEl).setName("Autosave delay").setDesc("Milliseconds after the last keystroke before a card is written to its note. Leaving a card always saves at once.").addSlider((sl) => sl.setLimits(200, 3e3, 100).setValue(s.autosaveMs).setDynamicTooltip().onChange((v) => {
       s.autosaveMs = v;
+      save();
+    }));
+    heading("Other plugins");
+    new Setting(containerEl).setName("Keep Linter out of the writing folder").setDesc("Adds the writing folder to the Linter plugin's folders to ignore, so its rules never rewrite a card. Off removes the entry, if Dendrite added it.").addToggle((tg) => tg.setValue(s.manageLinter).onChange((v) => {
+      s.manageLinter = v;
+      save();
+    }));
+    new Setting(containerEl).setName("Clean up cards with Linter").setDesc(`When you leave a card you changed, run the Linter plugin's rules on it, except those that break cards: "File name heading" and "Capitalize headings".`).addToggle((tg) => tg.setValue(s.lintCards).onChange((v) => {
+      s.lintCards = v;
       save();
     }));
   }
@@ -3563,3 +3568,4 @@ dendrite_prefix: ${prefix}
 module.exports.core = core;
 module.exports.DendriteView = DendriteView;
 module.exports.DendritePreview = DendritePreview;
+module.exports.DendriteSettings = DendriteSettings;

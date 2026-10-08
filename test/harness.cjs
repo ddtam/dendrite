@@ -226,8 +226,35 @@ const obsidian = {
         setState() { return Promise.resolve(); }
     },
     Plugin: class {},
-    PluginSettingTab: class {},
-    Setting: class {},
+    Setting: class {
+        constructor(container) {
+            this.container = container;
+            obsidian.settingsLog = obsidian.settingsLog || [];
+        }
+        setName(n) {
+            this.name = n;
+            obsidian.settingsLog.push(this);
+            return this;
+        }
+        setDesc() { return this; }
+        setHeading() { this.heading = true; return this; }
+        stub() {
+            const s = new Proxy({}, { get: (o, k) => (k === 'then' ?
+                undefined : () => s) });
+            return s;
+        }
+        addText(f) { f(this.stub()); return this; }
+        addToggle(f) { f(this.stub()); return this; }
+        addDropdown(f) { f(this.stub()); return this; }
+        addSlider(f) { f(this.stub()); return this; }
+        addButton(f) { f(this.stub()); return this; }
+    },
+    PluginSettingTab: class {
+        constructor(app, plugin) {
+            this.app = app;
+            this.containerEl = make('div');
+        }
+    },
     Modal: class {},
     Menu: class {
         constructor() { this.titles = []; obsidian.lastMenu = this; }

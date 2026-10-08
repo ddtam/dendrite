@@ -837,3 +837,26 @@ test('merging keeps the less mature status', async () => {
     assert.match(read(cardPath('G-aaaaa')), /dendrite_status: done\n---\nA\./,
                  'undo restores the status too');
 });
+
+test('settings are grouped under headings by what they affect', () => {
+    const { DendriteSettings } = require('../src/main.js');
+    h.obsidian.settingsLog = [];
+    const tab = new DendriteSettings({}, {
+        settings: { writingFolder: 'Writing', headingTop: 1, cardWidth: 380,
+                    autosaveMs: 600, openInDendrite: true, vimKeys: true,
+                    manageLinter: true, lintCards: true,
+                    obsidianEditor: true },
+        saveSettings() {}, rerender() {} });
+    tab.display();
+    const out = h.obsidian.settingsLog.map((s) =>
+        (s.heading ? '## ' : '') + s.name);
+    assert.deepEqual(out, [
+        '## Manuscripts', 'Writing folder', 'Open index notes in Dendrite',
+        'Top section heading level',
+        '## Board', 'Card width', 'Vim-style keys',
+        '## Writing in cards', 'Use Obsidian\'s editor in cards',
+        'Autosave delay',
+        '## Other plugins', 'Keep Linter out of the writing folder',
+        'Clean up cards with Linter',
+    ]);
+});
