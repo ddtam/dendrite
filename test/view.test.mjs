@@ -462,3 +462,15 @@ test('right-click opens the card menu at the pointer, delete included',
     await tick(10);
     assert.ok(!view.byId.has('G-bbbbb'));
 });
+
+test('a card changing height redraws the flow', async () => {
+    const { view } = await open(
+        '---\ndendrite_prefix: G\n---\n- [[G-aaaaa|A]]\n    - [[G-bbbbb|B]]\n',
+        { 'G-aaaaa': 'A', 'G-bbbbb': 'B' });
+    let draws = 0;
+    const orig = view.drawFlow.bind(view);
+    view.drawFlow = () => { draws++; orig(); };
+    globalThis.lastResizer.fire();
+    await tick(5);
+    assert.equal(draws, 1);
+});

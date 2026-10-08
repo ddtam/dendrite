@@ -489,6 +489,7 @@ var DendriteView = class extends ItemView {
       (entries) => this.onVisible(entries),
       { root: null, rootMargin: "600px 200px" }
     );
+    this.resizer = new ResizeObserver(() => this.onResize());
     this.registerEvent(this.app.vault.on(
       "modify",
       (f) => this.onModify(f)
@@ -543,6 +544,7 @@ var DendriteView = class extends ItemView {
   async onClose() {
     await this.flush();
     if (this.observer) this.observer.disconnect();
+    if (this.resizer) this.resizer.disconnect();
     for (const r of this.rendered.values()) r.comp.unload();
     this.rendered.clear();
   }
@@ -584,6 +586,7 @@ var DendriteView = class extends ItemView {
   render() {
     const el = this.contentEl;
     if (this.observer) this.observer.disconnect();
+    if (this.resizer) this.resizer.disconnect();
     el.empty();
     this.cardEls.clear();
     el.style.setProperty(
@@ -740,6 +743,7 @@ var DendriteView = class extends ItemView {
     }
     this.cardEls.set(n.id, card);
     if (this.observer) this.observer.observe(card);
+    if (this.resizer) this.resizer.observe(card);
   }
   onVisible(entries) {
     for (const e of entries) {
@@ -826,6 +830,14 @@ var DendriteView = class extends ItemView {
     }
     this.renderToolbar();
     this.scheduleFlow();
+  }
+  onResize() {
+    if (this.resizeFrame) return;
+    this.resizeFrame = requestAnimationFrame(() => {
+      this.resizeFrame = null;
+      this.centre(false);
+      this.drawFlow();
+    });
   }
   scheduleFlow() {
     if (this.flowFrame) return;

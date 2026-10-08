@@ -112,6 +112,9 @@ class DendriteView extends ItemView {
         this.observer = new IntersectionObserver(
             (entries) => this.onVisible(entries),
             { root: null, rootMargin: '600px 200px' });
+        // A card changing height, as when it opens for editing or its text
+        // renders, moves the flow's edges and the centre.
+        this.resizer = new ResizeObserver(() => this.onResize());
         this.registerEvent(this.app.vault.on('modify',
             (f) => this.onModify(f)));
         this.registerEvent(this.app.vault.on('rename', (f, old) => {
@@ -154,6 +157,7 @@ class DendriteView extends ItemView {
     async onClose() {
         await this.flush();
         if (this.observer) this.observer.disconnect();
+        if (this.resizer) this.resizer.disconnect();
         for (const r of this.rendered.values()) r.comp.unload();
         this.rendered.clear();
     }
@@ -202,6 +206,7 @@ class DendriteView extends ItemView {
     render() {
         const el = this.contentEl;
         if (this.observer) this.observer.disconnect();
+        if (this.resizer) this.resizer.disconnect();
         // Keep cached card renderings: they are re-attached below, so a
         // structural change rebuilds the frame, not the markdown.
         el.empty();
@@ -340,6 +345,7 @@ class DendriteView extends ItemView {
         }
         this.cardEls.set(n.id, card);
         if (this.observer) this.observer.observe(card);
+        if (this.resizer) this.resizer.observe(card);
     }
 
     onVisible(entries) {
@@ -428,6 +434,15 @@ class DendriteView extends ItemView {
         }
         this.renderToolbar();
         this.scheduleFlow();
+    }
+
+    onResize() {
+        if (this.resizeFrame) return;
+        this.resizeFrame = requestAnimationFrame(() => {
+            this.resizeFrame = null;
+            this.centre(false);
+            this.drawFlow();
+        });
     }
 
     scheduleFlow() {

@@ -38,6 +38,13 @@ P.scrollTo = function () {};
 global.createDiv = (o) => make('div', o);
 global.createEl = (t, o) => make(t, o);
 
+global.ResizeObserver = class {
+    constructor(cb) { this.cb = cb; global.lastResizer = this; }
+    observe() {}
+    disconnect() {}
+    fire() { this.cb([]); }
+};
+
 global.IntersectionObserver = class {
     constructor(cb) { this.cb = cb; }
     observe(el) {
