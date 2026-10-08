@@ -502,22 +502,18 @@ class DendriteView extends ItemView {
         if (!this.board) return;
         const node = this.active && this.byId.get(this.active);
         if (!node) return;
-        const lineage = new Set();
-        for (let n = node; n && n.id; n = n.parent) lineage.add(n.id);
-        for (const d of core.descendants(node)) lineage.add(d.id);
         const behavior = smooth ? 'smooth' : 'auto';
         const cols = this.board.querySelectorAll('.dendrite-col');
+        const pos = (id) => {
+            const el = this.cardEls.get(id);
+            return el ? { top: el.offsetTop, height: el.offsetHeight } : null;
+        };
+        const heights = [...cols].map((c) => c.clientHeight);
+        const targets = core.alignColumns(this.cols, node, pos, heights);
         cols.forEach((col, d) => {
-            const inCol = (this.cols[d] || []).filter(
-                (n) => lineage.has(n.id));
-            if (!inCol.length) return;
-            let target = inCol;
-            if (d === node.depth) target = [node];
-            const a = this.cardEls.get(target[0].id);
-            const b = this.cardEls.get(target[target.length - 1].id);
-            if (!a || !b) return;
-            const mid = (a.offsetTop + b.offsetTop + b.offsetHeight) / 2;
-            col.scrollTo({ top: mid - col.clientHeight / 2, behavior });
+            if (targets[d] !== null) {
+                col.scrollTo({ top: targets[d], behavior });
+            }
         });
         const col = cols[node.depth];
         if (col) {

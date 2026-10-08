@@ -239,6 +239,47 @@ var require_core = __commonJS({
       walk(roots, "");
       return out;
     }
+    function alignColumns(cols, active, pos, heights) {
+      const targets = cols.map(() => null);
+      if (!active) return targets;
+      const lineage = /* @__PURE__ */ new Set([active.id]);
+      for (let n = active.parent; n && n.id; n = n.parent) lineage.add(n.id);
+      for (const d of descendants(active)) lineage.add(d.id);
+      const centre = (nodes, d) => {
+        const a = pos(nodes[0].id);
+        const b = pos(nodes[nodes.length - 1].id);
+        if (!a || !b) return null;
+        return (a.top + b.top + b.height) / 2 - heights[d] / 2;
+      };
+      const anchor = [];
+      for (let d = 0; d < cols.length; d++) {
+        const inCol = cols[d].filter((n) => lineage.has(n.id));
+        if (d === active.depth) {
+          targets[d] = centre([active], d);
+          anchor[d] = active;
+        } else if (inCol.length) {
+          targets[d] = centre(inCol, d);
+          anchor[d] = inCol[0];
+        } else if (d > active.depth && anchor[d - 1] && targets[d - 1] !== null) {
+          const prev = cols[d - 1];
+          const at = prev.indexOf(anchor[d - 1]);
+          let best = null;
+          prev.forEach((n, i) => {
+            if (!n.children.length) return;
+            const dist = Math.abs(i - at);
+            if (!best || dist < best.dist) best = { n, dist };
+          });
+          if (!best) continue;
+          const parent = pos(best.n.id);
+          const first = pos(best.n.children[0].id);
+          if (!parent || !first) continue;
+          const onScreen = parent.top - targets[d - 1];
+          targets[d] = first.top - onScreen;
+          anchor[d] = best.n.children[0];
+        }
+      }
+      return targets;
+    }
     var LIMIT = /^\s*(\d+(?:\.\d+)?)\s*(words?|characters?|chars?|pages?)\s*$/i;
     function parseLimit(value) {
       if (value === null || value === void 0 || value === "") return null;
@@ -272,6 +313,7 @@ var require_core = __commonJS({
       countText,
       measure,
       sectionNumbers,
+      alignColumns,
       INDENT,
       splitFrontmatter,
       parseIndex,
@@ -1059,23 +1101,18 @@ var DendriteView = class extends ItemView {
     if (!this.board) return;
     const node = this.active && this.byId.get(this.active);
     if (!node) return;
-    const lineage = /* @__PURE__ */ new Set();
-    for (let n = node; n && n.id; n = n.parent) lineage.add(n.id);
-    for (const d of core.descendants(node)) lineage.add(d.id);
     const behavior = smooth ? "smooth" : "auto";
     const cols = this.board.querySelectorAll(".dendrite-col");
+    const pos = (id) => {
+      const el = this.cardEls.get(id);
+      return el ? { top: el.offsetTop, height: el.offsetHeight } : null;
+    };
+    const heights = [...cols].map((c) => c.clientHeight);
+    const targets = core.alignColumns(this.cols, node, pos, heights);
     cols.forEach((col2, d) => {
-      const inCol = (this.cols[d] || []).filter(
-        (n) => lineage.has(n.id)
-      );
-      if (!inCol.length) return;
-      let target = inCol;
-      if (d === node.depth) target = [node];
-      const a = this.cardEls.get(target[0].id);
-      const b = this.cardEls.get(target[target.length - 1].id);
-      if (!a || !b) return;
-      const mid = (a.offsetTop + b.offsetTop + b.offsetHeight) / 2;
-      col2.scrollTo({ top: mid - col2.clientHeight / 2, behavior });
+      if (targets[d] !== null) {
+        col2.scrollTo({ top: targets[d], behavior });
+      }
     });
     const col = cols[node.depth];
     if (col) {

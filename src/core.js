@@ -319,6 +319,63 @@ function sectionNumbers(roots, hasHeading) {
     return out;
 }
 
+// ---- column alignment ----------------------------------------------------
+
+/**
+ * Where each column scrolls to, Gingko-style. The active card's column
+ * centres it, and each column to its left centres the ancestor it holds.
+ * A column to the right centres the active card's descendants it holds;
+ * if it holds none, it top-aligns a group of children with that group's
+ * parent, choosing the parent nearest the previous column's anchor, so
+ * children always sit beside their parent.
+ *
+ * `cols` is columns(root); `pos(id)` gives a card's { top, height } in
+ * its column; `heights[d]` is column d's visible height. Returns the
+ * scrollTop for each column, or null to leave a column alone.
+ */
+function alignColumns(cols, active, pos, heights) {
+    const targets = cols.map(() => null);
+    if (!active) return targets;
+    const lineage = new Set([active.id]);
+    for (let n = active.parent; n && n.id; n = n.parent) lineage.add(n.id);
+    for (const d of descendants(active)) lineage.add(d.id);
+    const centre = (nodes, d) => {
+        const a = pos(nodes[0].id);
+        const b = pos(nodes[nodes.length - 1].id);
+        if (!a || !b) return null;
+        return (a.top + b.top + b.height) / 2 - heights[d] / 2;
+    };
+    const anchor = [];
+    for (let d = 0; d < cols.length; d++) {
+        const inCol = cols[d].filter((n) => lineage.has(n.id));
+        if (d === active.depth) {
+            targets[d] = centre([active], d);
+            anchor[d] = active;
+        } else if (inCol.length) {
+            targets[d] = centre(inCol, d);
+            anchor[d] = inCol[0];
+        } else if (d > active.depth && anchor[d - 1] &&
+                   targets[d - 1] !== null) {
+            const prev = cols[d - 1];
+            const at = prev.indexOf(anchor[d - 1]);
+            let best = null;
+            prev.forEach((n, i) => {
+                if (!n.children.length) return;
+                const dist = Math.abs(i - at);
+                if (!best || dist < best.dist) best = { n, dist };
+            });
+            if (!best) continue;
+            const parent = pos(best.n.id);
+            const first = pos(best.n.children[0].id);
+            if (!parent || !first) continue;
+            const onScreen = parent.top - targets[d - 1];
+            targets[d] = first.top - onScreen;
+            anchor[d] = best.n.children[0];
+        }
+    }
+    return targets;
+}
+
 // ---- limits and counts ---------------------------------------------------
 
 const LIMIT = /^\s*(\d+(?:\.\d+)?)\s*(words?|characters?|chars?|pages?)\s*$/i;
@@ -376,6 +433,7 @@ function measure(count, unit, wordsPerPage) {
 
 module.exports = {
     parseLimit, formatLimit, countText, measure, sectionNumbers,
+    alignColumns,
     INDENT, splitFrontmatter, parseIndex, serialiseTree, writeIndexText,
     deriveLabel, stripComments, validPrefix, newId, makeNode, makeRoot,
     insertSibling, appendChild, moveWithin, indent, outdent, remove,

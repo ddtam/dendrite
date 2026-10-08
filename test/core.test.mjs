@@ -239,3 +239,34 @@ test('sections are numbered by position and renumber when moved', () => {
                  '# 1. Significance\n\n# 2. Aims\n\n## 2.1 Aim 1\n\n' +
                  'Text.\n');
 });
+
+test('a column with nothing on the active path aligns children beside ' +
+     'their parent', () => {
+    // Column 0: A (children a1, a2), B (no children), C (child c1).
+    const root = c.makeRoot();
+    const [A, B, C] = ['A', 'B', 'C'].map((id) => c.makeNode(id, id, null));
+    for (const n of [A, B, C]) c.appendChild(root, n);
+    const [a1, a2] = ['a1', 'a2'].map((id) => c.makeNode(id, id, null));
+    c.appendChild(A, a1);
+    c.appendChild(A, a2);
+    const c1 = c.makeNode('c1', 'c1', null);
+    c.appendChild(C, c1);
+    const cols = c.columns(root);
+    // Each card 100 high; column 0 cards at 0, 100, 200; column 1 groups
+    // a1 at 0, a2 at 100, c1 at 220.
+    const top = { A: 0, B: 100, C: 200, a1: 0, a2: 100, c1: 220 };
+    const pos = (id) => ({ top: top[id], height: 100 });
+    // A active: its children centre in column 1.
+    let t = c.alignColumns(cols, A, pos, [400, 400]);
+    assert.equal(t[0], 50 - 200);
+    assert.equal(t[1], 100 - 200);
+    // B active, no children: the nearest parent's group is top-aligned
+    // with it. A and C are equally near; the one above, A, is chosen.
+    t = c.alignColumns(cols, B, pos, [400, 400]);
+    assert.equal(t[0], 150 - 200);
+    const aOnScreen = top.A - t[0];
+    assert.equal(top.a1 - t[1], aOnScreen, 'a1 sits beside A');
+    // C active: c1 centres beside it.
+    t = c.alignColumns(cols, C, pos, [400, 400]);
+    assert.equal(t[1], 270 - 200);
+});
