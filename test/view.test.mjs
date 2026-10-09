@@ -865,6 +865,8 @@ test('settings are grouped under headings by what they affect', () => {
         '## Board', 'Card width', 'Vim-style keys',
         '## Writing in cards', 'Use Obsidian\'s editor in cards',
         'Autosave delay',
+        '## PDF and Word export', 'Pandoc', 'PDF engine', 'Zotero port',
+        'Fallback .bib',
         '## Other plugins', 'Keep Linter out of the writing folder',
         'Clean up cards with Linter',
     ]);
@@ -933,4 +935,31 @@ test('dragging a card drops it above, below or into another, with undo',
                  '    - [[G-bbbbb|B]]\n', 'undo reverses one drop');
     assert.equal(document.querySelector('.dendrite-ghost'), null,
                  'no label left behind');
+});
+
+test('PDF export from the board uses the manuscript\'s citation style',
+     async () => {
+    const { view } = await open(
+        '---\ndendrite_prefix: G\ndendrite_csl: styles/apa.csl\n---\n' +
+        '- [[G-aaaaa|A]]\n',
+        { 'G-aaaaa': 'As shown [@smith2020].' });
+    view.app.vault.adapter = { getBasePath: () => '/vault' };
+    const runs = [];
+    const shown = [];
+    view.plugin.settings.pandocPath = 'pandoc';
+    view.plugin.pandocDeps = () => ({
+        tmpdir: () => '/tmp', join: (...a) => a.join('/'),
+        writeFile: async () => {}, remove: () => {},
+        run: async (cmd, args) => { runs.push(args); },
+        fetch: async () => ({ json: async () => (
+            { result: '@article{smith2020}' }) }),
+    });
+    view.plugin.showExport = async (rel, full, fmt) =>
+        shown.push([rel, fmt]);
+    await view.exportTo(null, 'pdf');
+    const args = runs[0];
+    assert.ok(args.includes('/vault/W/Grant/exports/Grant.pdf'),
+              'written beside the index, in the vault');
+    assert.equal(args[args.indexOf('--csl') + 1], '/vault/styles/apa.csl');
+    assert.deepEqual(shown, [['W/Grant/exports/Grant.pdf', 'pdf']]);
 });

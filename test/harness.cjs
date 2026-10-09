@@ -212,6 +212,7 @@ function makeApp() {
 const notices = [];
 const obsidian = {
     TFile, TFolder,
+    Platform: { isDesktopApp: true },
     MarkdownView: class {},
     ItemView: class {
         constructor(leaf) {
@@ -281,7 +282,10 @@ const obsidian = {
     MarkdownRenderer: {
         async render(app, md, el) { el.textContent = md; },
     },
-    Notice: class { constructor(m) { notices.push(m); } },
+    Notice: class {
+        constructor(m) { notices.push(m); }
+        hide() {}
+    },
     Scope: class {
         constructor() { this.keys = []; }
         register(mods, key, fn) { this.keys.push({ mods, key, fn }); }

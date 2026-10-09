@@ -157,7 +157,9 @@ Colours come from the [Pretty Properties](https://github.com/anareaty/pretty-pro
 
 ## Export
 
-**Export** in the view's toolbar, or **Export this branch** in a card's menu, writes markdown to `exports/` beside the index: what the preview shows, with headings levelled by each card's depth.
+**Export** in the bar, or a card's menu for one branch, writes to `exports/` beside the index, as markdown, PDF or Word: what the preview shows, with headings levelled by each card's depth and the text tidied like the Linter's blank-line rules.
+
+PDF and Word go through [Pandoc](https://pandoc.org) on the desktop, PDF with `xelatex` from TeX Live. Citations are written in cards as `[@citekey]` and fetched at export, exactly the keys used, from Zotero through [Better BibTeX](https://retorque.re/zotero-better-bibtex/); a key the library lacks stops the export and is named. With Zotero closed, a fallback `.bib` set in the settings is used, or the export stops. The citation style is set per manuscript in its Settings, as a CSL file in the vault; with none, Pandoc's default, Chicago author-date, is used. A PDF opens in a pane beside the board, and a Word file in the system's default app. Obsidian's links become their text and embedded images real images.
 
 ## Development
 

@@ -8,7 +8,8 @@ const ctx = await esbuild.context({
     format: 'cjs',
     platform: 'browser',
     target: 'es2020',
-    external: ['obsidian', 'electron'],
+    external: ['obsidian', 'electron', 'fs', 'os', 'path',
+               'child_process'],
     outfile: 'main.js',
     logLevel: 'info',
     banner: { js: '/* Dendrite: bundled from src/ by esbuild; edit src/, ' +

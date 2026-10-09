@@ -16,12 +16,13 @@
 const {
     ItemView, MarkdownView, Plugin, PluginSettingTab, Setting,
     MarkdownRenderer,
-    Component, Modal, Notice, TFile, TFolder, Scope, setIcon,
+    Component, Modal, Notice, TFile, TFolder, Scope, setIcon, Platform,
     normalizePath, Keymap,
 } = require('obsidian');
 const core = require('./core.js');
 const textedit = require('./textedit.js');
 const { cardEditor } = require('./editor.js');
+const pandoc = require('./pandoc.js');
 
 const VIEW = 'dendrite-view';
 const PREVIEW = 'dendrite-preview';
@@ -35,6 +36,10 @@ const DEFAULTS = {
     manageLinter: true,
     lintCards: true,
     obsidianEditor: true,
+    pandocPath: 'pandoc',
+    pdfEngine: 'xelatex',
+    zoteroPort: 23119,
+    fallbackBib: '',
     // The Linter ignore entry Dendrite added itself, if any, so that only
     // that entry is ever removed again.
     linterAdded: null,
@@ -296,8 +301,8 @@ class DendriteView extends ItemView {
             b.setAttr('aria-label', title);
             b.onclick = fn;
         };
-        btn('file-output', 'Export', 'Export the manuscript to markdown',
-            () => this.exportTo(null));
+        btn('file-output', 'Export', 'Export the manuscript to markdown, ' +
+            'PDF or Word', (e) => this.exportMenu(null, e));
         btn('undo-2', 'Undo', 'Undo the last structural change (Ctrl+Z)',
             () => this.doUndo());
         btn('file-text', 'Index', 'Open the index note as markdown',
@@ -654,8 +659,15 @@ class DendriteView extends ItemView {
                 }
             });
         }
-        item('Export this branch', 'file-output',
-             () => this.exportTo(this.byId.get(this.active)));
+        const branch = this.byId.get(this.active);
+        item('Export this branch to markdown', 'file-output',
+             () => this.exportTo(branch, 'md'));
+        if (Platform.isDesktopApp) {
+            item('Export this branch to PDF', 'file-output',
+                 () => this.exportTo(branch, 'pdf'));
+            item('Export this branch to Word', 'file-output',
+                 () => this.exportTo(branch, 'docx'));
+        }
         item('Open card note', 'file', () => {
             const f = this.cardFile(this.active);
             if (f) this.plugin.openAsMarkdown(f);
@@ -1567,6 +1579,8 @@ class DendriteView extends ItemView {
             headingTop: top >= 1 && top <= 6 ? top :
                 this.plugin.settings.headingTop,
             number: fm.dendrite_number_sections === true,
+            csl: typeof fm.dendrite_csl === 'string' &&
+                fm.dendrite_csl.trim() ? fm.dendrite_csl.trim() : null,
         };
     }
 
@@ -2009,7 +2023,28 @@ class DendriteView extends ItemView {
 
     // ---- export ----------------------------------------------------------
 
-    async exportTo(node) {
+    /** Export, the whole manuscript or a branch, as chosen from a menu. */
+    exportMenu(node, event) {
+        const { Menu } = require('obsidian');
+        const m = new Menu();
+        m.addItem((i) => i.setTitle('Markdown').setIcon('file-text')
+            .onClick(() => this.exportTo(node, 'md')));
+        if (Platform.isDesktopApp) {
+            m.addItem((i) => i.setTitle('PDF').setIcon('file-output')
+                .onClick(() => this.exportTo(node, 'pdf')));
+            m.addItem((i) => i.setTitle('Word').setIcon('file-output')
+                .onClick(() => this.exportTo(node, 'docx')));
+        }
+        if (event) m.showAtMouseEvent(event);
+    }
+
+    /**
+     * Export the manuscript, or one branch, to `exports/` beside the index:
+     * markdown always, PDF and Word through Pandoc on the desktop, with
+     * citations fetched from Zotero. Exports stay in the vault so a PDF
+     * opens beside the board and travels with the vault's sync.
+     */
+    async exportTo(node, format = 'md') {
         await this.flush();
         const scope = node ? [node] : this.root.children;
         const ids = node ? [node, ...core.descendants(node)] :
@@ -2034,6 +2069,10 @@ class DendriteView extends ItemView {
         }
         const name = safeName(this.file.basename +
             (node ? ' - ' + (node.label || node.id) : ''));
+        if (format !== 'md') {
+            await this.exportPandoc(text, format, dir, name, ms);
+            return;
+        }
         const path = normalizePath(`${dir}/${name}.md`);
         const existing = this.app.vault.getAbstractFileByPath(path);
         let out;
@@ -2046,6 +2085,40 @@ class DendriteView extends ItemView {
         await this.app.workspace.getLeaf('tab').openFile(out);
         new Notice(`Dendrite: exported to ${path}`);
     }
+
+    async exportPandoc(text, format, dir, name, ms) {
+        const s = this.plugin.settings;
+        const base = this.app.vault.adapter.getBasePath ?
+            this.app.vault.adapter.getBasePath() : '';
+        const nodePath = require('path');
+        const rel = normalizePath(`${dir}/${name}.${format}`);
+        const output = nodePath.join(base, rel);
+        const csl = ms.csl ? nodePath.join(base, ms.csl) : null;
+        const notice = new Notice('Dendrite: exporting to ' +
+            (format === 'pdf' ? 'PDF' : 'Word') + '…', 0);
+        const result = await pandoc.exportDocument({
+            md: text, format, output, csl,
+            port: s.zoteroPort, fallbackBib: s.fallbackBib || null,
+            pandoc: s.pandocPath || 'pandoc',
+            engine: format === 'pdf' ? (s.pdfEngine || 'xelatex') : null,
+            resourcePath: base,
+            resolve: (link) => {
+                const f = this.app.metadataCache.getFirstLinkpathDest(
+                    link, this.file.path);
+                return f ? nodePath.join(base, f.path) : null;
+            },
+        }, this.plugin.pandocDeps());
+        notice.hide();
+        if (result.error) {
+            new Notice(`Dendrite: ${result.error}`, 12000);
+            return;
+        }
+        const cites = result.keys.length ?
+            ` with ${result.keys.length} citation(s)` : '';
+        new Notice(`Dendrite: exported to ${rel}${cites}.`);
+        await this.plugin.showExport(rel, output, format);
+    }
+
 }
 
 /**
@@ -2381,6 +2454,14 @@ class ManuscriptModal extends Modal {
                      'moved.')
             .addToggle((tg) => tg.setValue(ms.number)
                 .onChange((v) => { draft.dendrite_number_sections = v; }));
+        new Setting(contentEl).setName('Citation style')
+            .setDesc('A CSL style file in the vault, as a path from the ' +
+                     'vault root, for PDF and Word export. Empty: ' +
+                     'Pandoc\'s default, Chicago author-date.')
+            .addText((t) => t.setPlaceholder('styles/nature.csl')
+                .setValue(ms.csl || '').onChange((v) => {
+                    draft.dendrite_csl = v.trim() || null;
+                }));
         new Setting(contentEl).setName('Top section heading level')
             .setDesc('Export writes top-level sections at this level.')
             .addDropdown((d) => {
@@ -2573,6 +2654,36 @@ class DendriteSettings extends PluginSettingTab {
                     s.autosaveMs = v;
                     save();
                 }));
+
+        heading('PDF and Word export');
+        new Setting(containerEl).setName('Pandoc')
+            .setDesc('The pandoc command, or its full path.')
+            .addText((t) => t.setValue(s.pandocPath).onChange((v) => {
+                s.pandocPath = v.trim() || 'pandoc';
+                save();
+            }));
+        new Setting(containerEl).setName('PDF engine')
+            .setDesc('The LaTeX engine Pandoc uses for PDF, or its full ' +
+                     'path. TeX Live\'s usual folders are searched.')
+            .addText((t) => t.setValue(s.pdfEngine).onChange((v) => {
+                s.pdfEngine = v.trim() || 'xelatex';
+                save();
+            }));
+        new Setting(containerEl).setName('Zotero port')
+            .setDesc('Where Better BibTeX answers on this computer.')
+            .addText((t) => t.setValue(String(s.zoteroPort))
+                .onChange((v) => {
+                    s.zoteroPort = Number(v) > 0 ? Number(v) : 23119;
+                    save();
+                }));
+        new Setting(containerEl).setName('Fallback .bib')
+            .setDesc('Used when Zotero is not running. A full path on this ' +
+                     'computer, such as a Better BibTeX auto-export; empty ' +
+                     'stops the export instead.')
+            .addText((t) => t.setValue(s.fallbackBib).onChange((v) => {
+                s.fallbackBib = v.trim();
+                save();
+            }));
 
         heading('Other plugins');
         new Setting(containerEl).setName('Keep Linter out of the writing ' +
@@ -2788,6 +2899,83 @@ module.exports = class DendritePlugin extends Plugin {
         await target.setViewState({ type: VIEW, active: true,
                                     state: { file: file.path, card } });
         this.app.workspace.revealLeaf(target);
+    }
+
+    /** Node's file and process access, for Pandoc export on the desktop. */
+    pandocDeps() {
+        const fs = require('fs');
+        const os = require('os');
+        const path = require('path');
+        const { execFile } = require('child_process');
+        return {
+            tmpdir: os.tmpdir,
+            join: path.join,
+            writeFile: (f, t) => fs.promises.writeFile(f, t),
+            remove: (f) => {
+                try { fs.unlinkSync(f); } catch (e) { /* already gone */ }
+            },
+            run: (cmd, args) => new Promise((res, rej) => execFile(cmd, args,
+                { timeout: 180000, env: this.pandocEnv() },
+                (err, out, stderr) => (err ?
+                    rej(Object.assign(err, { stderr })) : res()))),
+            fetch: (u, i) => fetch(u, i),
+        };
+    }
+
+    /**
+     * The search path Pandoc runs with: Obsidian's own plus TeX Live's
+     * usual install folders, since an app started from the desktop does
+     * not read the shell profile that adds them.
+     */
+    pandocEnv() {
+        const fs = require('fs');
+        const path = require('path');
+        const extra = [];
+        for (const root of ['/usr/local/texlive', '/opt/texlive']) {
+            let years = [];
+            try {
+                years = fs.readdirSync(root).sort().reverse();
+            } catch (e) {
+                continue;
+            }
+            for (const y of years) {
+                const bin = path.join(root, y, 'bin');
+                let arches = [];
+                try { arches = fs.readdirSync(bin); } catch (e) { continue; }
+                for (const a of arches) extra.push(path.join(bin, a));
+            }
+        }
+        extra.push('/Library/TeX/texbin', '/usr/local/bin',
+                   '/opt/homebrew/bin');
+        const vars = Object.assign({}, globalThis.process.env);
+        vars.PATH = [vars.PATH || '', ...extra].filter(Boolean).join(':');
+        return vars;
+    }
+
+    /**
+     * Show an export: a PDF in a pane beside the board, reusing the one
+     * already showing it; a Word file in the system's default app.
+     */
+    async showExport(rel, full, format) {
+        if (format !== 'pdf') {
+            try {
+                const { shell } = require('electron');
+                await shell.openPath(full);
+            } catch (e) { /* no desktop shell: the notice says where */ }
+            return;
+        }
+        // The vault notices a file written outside its API a moment later.
+        let file = null;
+        for (let i = 0; i < 20 && !file; i++) {
+            const f = this.app.vault.getAbstractFileByPath(rel);
+            if (f instanceof TFile) file = f;
+            else await new Promise((r) => setTimeout(r, 150));
+        }
+        if (!file) return;
+        const open = this.app.workspace.getLeavesOfType('pdf')
+            .find((l) => l.view.file && l.view.file.path === rel);
+        const leaf = open || this.app.workspace.getLeaf('split', 'vertical');
+        await leaf.openFile(file, { active: false });
     }
 
     /** The preview for a manuscript, opened beside the board or reused. */

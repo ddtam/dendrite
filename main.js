@@ -924,6 +924,148 @@ var require_editor = __commonJS({
   }
 });
 
+// src/pandoc.js
+var require_pandoc = __commonJS({
+  "src/pandoc.js"(exports2, module2) {
+    "use strict";
+    function citekeys(md) {
+      const out = [];
+      const seen = /* @__PURE__ */ new Set();
+      const re = /(?<![\w.@])@([A-Za-z0-9_][\w:.#$%&+?<>~/-]*)/g;
+      let m;
+      while ((m = re.exec(md)) !== null) {
+        const key = m[1].replace(/[.:,;?]+$/, "");
+        if (key && !seen.has(key)) {
+          seen.add(key);
+          out.push(key);
+        }
+      }
+      return out;
+    }
+    function toPandoc(md, resolve) {
+      return md.replace(
+        /!\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]*))?\]\]/g,
+        (all, name, alt) => {
+          const path = resolve(name.trim());
+          if (path && /\.(png|jpe?g|gif|svg|webp|pdf)$/i.test(path)) {
+            const width = alt && /^\d+$/.test(alt.trim()) ? `{width=${alt.trim()}px}` : "";
+            return `![](<${path}>)${width}`;
+          }
+          return name.trim();
+        }
+      ).replace(
+        /\[\[([^\]|#]*)(?:#([^\]|]*))?(?:\|([^\]]*))?\]\]/g,
+        (all, name, sub, alias) => (alias || sub || name).trim()
+      ).replace(/==([^=\n]+)==/g, "$1");
+    }
+    async function fetchBib(keys, port, deps) {
+      const call = async (ks) => {
+        const res = await deps.fetch(
+          `http://127.0.0.1:${port}/better-bibtex/json-rpc`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              jsonrpc: "2.0",
+              method: "item.export",
+              params: [ks, "Better BibLaTeX"]
+            })
+          }
+        );
+        return res.json();
+      };
+      let first;
+      try {
+        first = await call(keys);
+      } catch (err) {
+        return { down: true };
+      }
+      if (first && typeof first.result === "string") return { bib: first.result };
+      const missing = [];
+      let bib = "";
+      for (const k of keys) {
+        let r;
+        try {
+          r = await call([k]);
+        } catch (err) {
+          return { down: true };
+        }
+        if (r && typeof r.result === "string") bib += r.result + "\n";
+        else missing.push(k);
+      }
+      return missing.length ? { missing } : { bib };
+    }
+    function pandocArgs(o) {
+      const args = [
+        o.input,
+        "--from",
+        "markdown",
+        "-o",
+        o.output,
+        "--standalone"
+      ];
+      if (o.format === "pdf") {
+        args.push(
+          `--pdf-engine=${o.engine || "xelatex"}`,
+          "-V",
+          "geometry:margin=2.5cm"
+        );
+      }
+      if (o.bibliography) {
+        args.push("--citeproc", "--bibliography", o.bibliography);
+        if (o.csl) args.push("--csl", o.csl);
+      }
+      if (o.resourcePath) args.push("--resource-path", o.resourcePath);
+      return args;
+    }
+    async function exportDocument(o, deps) {
+      const text = toPandoc(o.md, o.resolve || (() => null));
+      const keys = citekeys(text);
+      const dir = deps.tmpdir();
+      const input = deps.join(dir, `dendrite-${Date.now()}.md`);
+      let bibliography = null;
+      if (keys.length) {
+        const got = await fetchBib(keys, o.port || 23119, deps);
+        if (got.missing) {
+          return { error: "Zotero has no item for " + got.missing.map((k) => "@" + k).join(", ") + ". Nothing was exported." };
+        }
+        if (got.down) {
+          if (!o.fallbackBib) {
+            return { error: "Zotero is not running, and no fallback .bib is set in Dendrite's settings. Nothing was exported." };
+          }
+          bibliography = o.fallbackBib;
+        } else {
+          bibliography = deps.join(dir, `dendrite-${Date.now()}.bib`);
+          await deps.writeFile(bibliography, got.bib);
+        }
+      }
+      await deps.writeFile(input, text);
+      const args = pandocArgs({
+        input,
+        output: o.output,
+        format: o.format,
+        engine: o.engine,
+        bibliography,
+        csl: o.csl,
+        resourcePath: o.resourcePath
+      });
+      try {
+        await deps.run(o.pandoc || "pandoc", args);
+      } catch (err) {
+        const msg = String(err && (err.stderr || err.message) || err).trim().split("\n").slice(-6).join("\n");
+        return { error: `Pandoc failed: ${msg}` };
+      } finally {
+        deps.remove(input);
+        if (bibliography && bibliography !== o.fallbackBib) {
+          deps.remove(bibliography);
+        }
+      }
+      return { ok: true, keys };
+    }
+    module2.exports = { citekeys, toPandoc, fetchBib, pandocArgs, exportDocument };
+  }
+});
+
 // src/main.js
 var {
   ItemView,
@@ -939,12 +1081,14 @@ var {
   TFolder,
   Scope,
   setIcon,
+  Platform,
   normalizePath,
   Keymap
 } = require("obsidian");
 var core = require_core();
 var textedit = require_textedit();
 var { cardEditor } = require_editor();
+var pandoc = require_pandoc();
 var VIEW = "dendrite-view";
 var PREVIEW = "dendrite-preview";
 var DEFAULTS = {
@@ -957,6 +1101,10 @@ var DEFAULTS = {
   manageLinter: true,
   lintCards: true,
   obsidianEditor: true,
+  pandocPath: "pandoc",
+  pdfEngine: "xelatex",
+  zoteroPort: 23119,
+  fallbackBib: "",
   // The Linter ignore entry Dendrite added itself, if any, so that only
   // that entry is ever removed again.
   linterAdded: null
@@ -1209,12 +1357,7 @@ var DendriteView = class extends ItemView {
       b.setAttr("aria-label", title);
       b.onclick = fn;
     };
-    btn(
-      "file-output",
-      "Export",
-      "Export the manuscript to markdown",
-      () => this.exportTo(null)
-    );
+    btn("file-output", "Export", "Export the manuscript to markdown, PDF or Word", (e) => this.exportMenu(null, e));
     btn(
       "undo-2",
       "Undo",
@@ -1596,11 +1739,24 @@ var DendriteView = class extends ItemView {
         }
       });
     }
+    const branch = this.byId.get(this.active);
     item(
-      "Export this branch",
+      "Export this branch to markdown",
       "file-output",
-      () => this.exportTo(this.byId.get(this.active))
+      () => this.exportTo(branch, "md")
     );
+    if (Platform.isDesktopApp) {
+      item(
+        "Export this branch to PDF",
+        "file-output",
+        () => this.exportTo(branch, "pdf")
+      );
+      item(
+        "Export this branch to Word",
+        "file-output",
+        () => this.exportTo(branch, "docx")
+      );
+    }
     item("Open card note", "file", () => {
       const f = this.cardFile(this.active);
       if (f) this.plugin.openAsMarkdown(f);
@@ -2479,7 +2635,8 @@ var DendriteView = class extends ItemView {
       countSpaces: fm.dendrite_count_spaces !== false,
       wordsPerPage: wpp > 0 ? wpp : 500,
       headingTop: top >= 1 && top <= 6 ? top : this.plugin.settings.headingTop,
-      number: fm.dendrite_number_sections === true
+      number: fm.dendrite_number_sections === true,
+      csl: typeof fm.dendrite_csl === "string" && fm.dendrite_csl.trim() ? fm.dendrite_csl.trim() : null
     };
   }
   cardProps(id) {
@@ -2906,7 +3063,24 @@ var DendriteView = class extends ItemView {
     return out;
   }
   // ---- export ----------------------------------------------------------
-  async exportTo(node) {
+  /** Export, the whole manuscript or a branch, as chosen from a menu. */
+  exportMenu(node, event) {
+    const { Menu } = require("obsidian");
+    const m = new Menu();
+    m.addItem((i) => i.setTitle("Markdown").setIcon("file-text").onClick(() => this.exportTo(node, "md")));
+    if (Platform.isDesktopApp) {
+      m.addItem((i) => i.setTitle("PDF").setIcon("file-output").onClick(() => this.exportTo(node, "pdf")));
+      m.addItem((i) => i.setTitle("Word").setIcon("file-output").onClick(() => this.exportTo(node, "docx")));
+    }
+    if (event) m.showAtMouseEvent(event);
+  }
+  /**
+   * Export the manuscript, or one branch, to `exports/` beside the index:
+   * markdown always, PDF and Word through Pandoc on the desktop, with
+   * citations fetched from Zotero. Exports stay in the vault so a PDF
+   * opens beside the board and travels with the vault's sync.
+   */
+  async exportTo(node, format = "md") {
     await this.flush();
     const scope = node ? [node] : this.root.children;
     const ids = node ? [node, ...core.descendants(node)] : core.allNodes(this.root);
@@ -2934,6 +3108,10 @@ var DendriteView = class extends ItemView {
       await this.app.vault.createFolder(dir);
     }
     const name = safeName(this.file.basename + (node ? " - " + (node.label || node.id) : ""));
+    if (format !== "md") {
+      await this.exportPandoc(text, format, dir, name, ms);
+      return;
+    }
     const path = normalizePath(`${dir}/${name}.md`);
     const existing = this.app.vault.getAbstractFileByPath(path);
     let out;
@@ -2945,6 +3123,41 @@ var DendriteView = class extends ItemView {
     }
     await this.app.workspace.getLeaf("tab").openFile(out);
     new Notice(`Dendrite: exported to ${path}`);
+  }
+  async exportPandoc(text, format, dir, name, ms) {
+    const s = this.plugin.settings;
+    const base = this.app.vault.adapter.getBasePath ? this.app.vault.adapter.getBasePath() : "";
+    const nodePath = require("path");
+    const rel = normalizePath(`${dir}/${name}.${format}`);
+    const output = nodePath.join(base, rel);
+    const csl = ms.csl ? nodePath.join(base, ms.csl) : null;
+    const notice = new Notice("Dendrite: exporting to " + (format === "pdf" ? "PDF" : "Word") + "\u2026", 0);
+    const result = await pandoc.exportDocument({
+      md: text,
+      format,
+      output,
+      csl,
+      port: s.zoteroPort,
+      fallbackBib: s.fallbackBib || null,
+      pandoc: s.pandocPath || "pandoc",
+      engine: format === "pdf" ? s.pdfEngine || "xelatex" : null,
+      resourcePath: base,
+      resolve: (link) => {
+        const f = this.app.metadataCache.getFirstLinkpathDest(
+          link,
+          this.file.path
+        );
+        return f ? nodePath.join(base, f.path) : null;
+      }
+    }, this.plugin.pandocDeps());
+    notice.hide();
+    if (result.error) {
+      new Notice(`Dendrite: ${result.error}`, 12e3);
+      return;
+    }
+    const cites = result.keys.length ? ` with ${result.keys.length} citation(s)` : "";
+    new Notice(`Dendrite: exported to ${rel}${cites}.`);
+    await this.plugin.showExport(rel, output, format);
   }
 };
 var DendritePreview = class extends ItemView {
@@ -3246,6 +3459,9 @@ var ManuscriptModal = class extends Modal {
     new Setting(contentEl).setName("Number sections by position").setDesc("Write headings without numbers; sections are numbered from where they sit, and renumber when moved.").addToggle((tg) => tg.setValue(ms.number).onChange((v) => {
       draft.dendrite_number_sections = v;
     }));
+    new Setting(contentEl).setName("Citation style").setDesc("A CSL style file in the vault, as a path from the vault root, for PDF and Word export. Empty: Pandoc's default, Chicago author-date.").addText((t) => t.setPlaceholder("styles/nature.csl").setValue(ms.csl || "").onChange((v) => {
+      draft.dendrite_csl = v.trim() || null;
+    }));
     new Setting(contentEl).setName("Top section heading level").setDesc("Export writes top-level sections at this level.").addDropdown((d) => {
       for (let i = 1; i <= 4; i++) d.addOption(String(i), "H" + i);
       d.setValue(String(ms.headingTop)).onChange((v) => {
@@ -3384,6 +3600,23 @@ var DendriteSettings = class extends PluginSettingTab {
     }));
     new Setting(containerEl).setName("Autosave delay").setDesc("Milliseconds after the last keystroke before a card is written to its note. Leaving a card always saves at once.").addSlider((sl) => sl.setLimits(200, 3e3, 100).setValue(s.autosaveMs).setDynamicTooltip().onChange((v) => {
       s.autosaveMs = v;
+      save();
+    }));
+    heading("PDF and Word export");
+    new Setting(containerEl).setName("Pandoc").setDesc("The pandoc command, or its full path.").addText((t) => t.setValue(s.pandocPath).onChange((v) => {
+      s.pandocPath = v.trim() || "pandoc";
+      save();
+    }));
+    new Setting(containerEl).setName("PDF engine").setDesc("The LaTeX engine Pandoc uses for PDF, or its full path. TeX Live's usual folders are searched.").addText((t) => t.setValue(s.pdfEngine).onChange((v) => {
+      s.pdfEngine = v.trim() || "xelatex";
+      save();
+    }));
+    new Setting(containerEl).setName("Zotero port").setDesc("Where Better BibTeX answers on this computer.").addText((t) => t.setValue(String(s.zoteroPort)).onChange((v) => {
+      s.zoteroPort = Number(v) > 0 ? Number(v) : 23119;
+      save();
+    }));
+    new Setting(containerEl).setName("Fallback .bib").setDesc("Used when Zotero is not running. A full path on this computer, such as a Better BibTeX auto-export; empty stops the export instead.").addText((t) => t.setValue(s.fallbackBib).onChange((v) => {
+      s.fallbackBib = v.trim();
       save();
     }));
     heading("Other plugins");
@@ -3598,6 +3831,91 @@ module.exports = class DendritePlugin extends Plugin {
       state: { file: file.path, card }
     });
     this.app.workspace.revealLeaf(target);
+  }
+  /** Node's file and process access, for Pandoc export on the desktop. */
+  pandocDeps() {
+    const fs = require("fs");
+    const os = require("os");
+    const path = require("path");
+    const { execFile } = require("child_process");
+    return {
+      tmpdir: os.tmpdir,
+      join: path.join,
+      writeFile: (f, t) => fs.promises.writeFile(f, t),
+      remove: (f) => {
+        try {
+          fs.unlinkSync(f);
+        } catch (e) {
+        }
+      },
+      run: (cmd, args) => new Promise((res, rej) => execFile(
+        cmd,
+        args,
+        { timeout: 18e4, env: this.pandocEnv() },
+        (err, out, stderr) => err ? rej(Object.assign(err, { stderr })) : res()
+      )),
+      fetch: (u, i) => fetch(u, i)
+    };
+  }
+  /**
+   * The search path Pandoc runs with: Obsidian's own plus TeX Live's
+   * usual install folders, since an app started from the desktop does
+   * not read the shell profile that adds them.
+   */
+  pandocEnv() {
+    const fs = require("fs");
+    const path = require("path");
+    const extra = [];
+    for (const root of ["/usr/local/texlive", "/opt/texlive"]) {
+      let years = [];
+      try {
+        years = fs.readdirSync(root).sort().reverse();
+      } catch (e) {
+        continue;
+      }
+      for (const y of years) {
+        const bin = path.join(root, y, "bin");
+        let arches = [];
+        try {
+          arches = fs.readdirSync(bin);
+        } catch (e) {
+          continue;
+        }
+        for (const a of arches) extra.push(path.join(bin, a));
+      }
+    }
+    extra.push(
+      "/Library/TeX/texbin",
+      "/usr/local/bin",
+      "/opt/homebrew/bin"
+    );
+    const vars = Object.assign({}, globalThis.process.env);
+    vars.PATH = [vars.PATH || "", ...extra].filter(Boolean).join(":");
+    return vars;
+  }
+  /**
+   * Show an export: a PDF in a pane beside the board, reusing the one
+   * already showing it; a Word file in the system's default app.
+   */
+  async showExport(rel, full, format) {
+    if (format !== "pdf") {
+      try {
+        const { shell } = require("electron");
+        await shell.openPath(full);
+      } catch (e) {
+      }
+      return;
+    }
+    let file = null;
+    for (let i = 0; i < 20 && !file; i++) {
+      const f = this.app.vault.getAbstractFileByPath(rel);
+      if (f instanceof TFile) file = f;
+      else await new Promise((r) => setTimeout(r, 150));
+    }
+    if (!file) return;
+    const open = this.app.workspace.getLeavesOfType("pdf").find((l) => l.view.file && l.view.file.path === rel);
+    const leaf = open || this.app.workspace.getLeaf("split", "vertical");
+    await leaf.openFile(file, { active: false });
   }
   /** The preview for a manuscript, opened beside the board or reused. */
   async openPreview(file) {
