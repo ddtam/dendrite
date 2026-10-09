@@ -14,6 +14,7 @@ global.HTMLElement = w.HTMLElement;
 global.Event = w.Event;
 global.getComputedStyle = (el) => w.getComputedStyle(el);
 global.requestAnimationFrame = (fn) => setTimeout(fn, 0);
+global.cancelAnimationFrame = (id) => clearTimeout(id);
 
 const P = w.HTMLElement.prototype;
 function make(tag, o = {}, parent) {

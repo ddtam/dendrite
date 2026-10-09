@@ -985,3 +985,30 @@ test('the index and every card get their type, kept beside existing ones',
     assert.equal((read(INDEX).match(/dendrite index/g) || []).length, 1,
                  'added once, never twice');
 });
+
+test('a wheel scroll moves the column and redraws the flow at once',
+     async () => {
+    const { view } = await open(
+        '---\ndendrite_prefix: G\n---\n- [[G-aaaaa|A]]\n    - [[G-bbbbb|B]]\n',
+        { 'G-aaaaa': 'A', 'G-bbbbb': 'B' });
+    const col = view.board.querySelectorAll('.dendrite-col')[1];
+    const inner = view.colInners[1];
+    Object.defineProperty(inner, 'scrollHeight', { value: 1000 });
+    Object.defineProperty(col, 'clientHeight', { value: 300 });
+    let draws = 0;
+    const orig = view.drawFlow.bind(view);
+    view.drawFlow = () => { draws++; orig(); };
+    const card = view.cardEls.get('G-bbbbb');
+    card.dispatchEvent(new h.window.WheelEvent('wheel',
+        { bubbles: true, cancelable: true, deltaY: 120 }));
+    assert.equal(inner.style.transform, 'translateY(-120px)');
+    assert.equal(draws, 1, 'redrawn in the same call, not a frame later');
+    card.dispatchEvent(new h.window.WheelEvent('wheel',
+        { bubbles: true, cancelable: true, deltaY: 5000 }));
+    assert.equal(inner.style.transform, 'translateY(-700px)',
+                 'clamped to the column\'s content');
+    card.dispatchEvent(new h.window.WheelEvent('wheel',
+        { bubbles: true, cancelable: true, deltaX: 200, deltaY: 10 }));
+    assert.equal(inner.style.transform, 'translateY(-700px)',
+                 'a sideways scroll is left to the board');
+});

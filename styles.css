@@ -124,23 +124,24 @@
     min-height: 0;
     background: var(--background-secondary);
     /* Grey for the context, each path card's group of children; the
-       accent for the thread, the path itself. */
+       accent for the thread, the path itself. Both are mixed with the
+       board's own background rather than made translucent, so the same
+       colour shows and overlapping shapes can never darken. */
     --dendrite-flow: color-mix(in srgb, var(--text-normal) 7%,
-                               transparent);
+                               var(--background-secondary));
     --dendrite-thread: color-mix(in srgb, var(--interactive-accent) 32%,
-                                 transparent);
+                                 var(--background-secondary));
 }
 
-/* Drawn behind the board, which is transparent, so the opaque cards
-   sit over it. */
+/* Inside the board, behind the columns, sized to the board's content by
+   the view so its horizontal scroll carries it. */
 .dendrite-flow {
     position: absolute;
-    inset: 0;
+    top: 0;
+    left: 0;
     z-index: 0;
-    width: 100%;
-    height: 100%;
     pointer-events: none;
-    overflow: hidden;
+    overflow: visible;
 }
 
 .dendrite-flow .dendrite-flow-context {
@@ -179,7 +180,9 @@
 
 .dendrite-col {
     flex: 0 0 var(--dendrite-col-width);
-    overflow-y: auto;
+    /* Moved by the view on the desktop, so the flow keeps pace. */
+    overflow: hidden;
+    z-index: 1;
     padding: 0 var(--dendrite-gap);
     scrollbar-width: none;
     contain: layout style;
@@ -695,4 +698,12 @@
 /* No text selection while a card is being dragged. */
 .dendrite-board.is-dragging-card {
     user-select: none;
+}
+
+.dendrite-board.is-native-scroll .dendrite-col {
+    overflow-y: auto;
+}
+
+.dendrite-col-inner {
+    will-change: transform;
 }

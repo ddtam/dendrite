@@ -1327,13 +1327,26 @@ var DendriteView = class extends ItemView {
     }
     this.renderBar(el);
     const stage = el.createDiv({ cls: "dendrite-stage" });
+    const board = stage.createDiv({ cls: "dendrite-board" });
+    this.board = board;
+    this.nativeScroll = !!Platform.isMobile;
+    board.toggleClass("is-native-scroll", this.nativeScroll);
     const NS = "http://www.w3.org/2000/svg";
     this.flowSvg = document.createElementNS(NS, "svg");
     this.flowSvg.classList.add("dendrite-flow");
-    stage.appendChild(this.flowSvg);
-    const board = stage.createDiv({ cls: "dendrite-board" });
-    this.board = board;
-    board.addEventListener("scroll", () => this.scheduleFlow(), true);
+    board.appendChild(this.flowSvg);
+    this.colInners = [];
+    this.offsets = [];
+    board.addEventListener("scroll", (e) => {
+      if (e.target !== board) this.scheduleFlow();
+    }, true);
+    if (!this.nativeScroll) {
+      board.addEventListener(
+        "wheel",
+        (e) => this.onWheel(e),
+        { passive: false }
+      );
+    }
     this.renderOrphans(stage);
     const cols = core.columns(this.root);
     this.cols = cols;
@@ -1347,17 +1360,20 @@ var DendriteView = class extends ItemView {
     cols.forEach((nodes, d) => {
       const col = board.createDiv({ cls: "dendrite-col" });
       col.dataset.depth = String(d);
-      col.createDiv({ cls: "dendrite-spacer" });
+      const inner = col.createDiv({ cls: "dendrite-col-inner" });
+      this.colInners[d] = inner;
+      this.offsets[d] = 0;
+      inner.createDiv({ cls: "dendrite-spacer" });
       let group = null;
       let parent;
       for (const n of nodes) {
         if (!group || n.parent !== parent) {
-          group = col.createDiv({ cls: "dendrite-group" });
+          group = inner.createDiv({ cls: "dendrite-group" });
           parent = n.parent;
         }
         this.renderShell(group, n);
       }
-      col.createDiv({ cls: "dendrite-spacer" });
+      inner.createDiv({ cls: "dendrite-spacer" });
     });
     this.applyActive(false);
     this.updateNumbers();
@@ -1570,7 +1586,7 @@ var DendriteView = class extends ItemView {
     this.resizeFrame = requestAnimationFrame(() => {
       this.resizeFrame = null;
       this.centre(false);
-      this.drawFlow();
+      if (this.nativeScroll) this.drawFlow();
     });
   }
   scheduleFlow() {
@@ -1594,12 +1610,15 @@ var DendriteView = class extends ItemView {
     }
     const node = this.active && this.byId.get(this.active);
     if (!node) return;
-    const box = svg.getBoundingClientRect();
+    svg.style.width = this.board.scrollWidth + "px";
+    svg.style.height = this.board.clientHeight + "px";
+    const box = this.board.getBoundingClientRect();
+    const sx = this.board.scrollLeft;
     const rel = (el) => {
       const r = el.getBoundingClientRect();
       return {
-        left: r.left - box.left,
-        right: r.right - box.left,
+        left: r.left - box.left + sx,
+        right: r.right - box.left + sx,
         top: r.top - box.top,
         bottom: r.bottom - box.top,
         r: parseFloat(getComputedStyle(el).borderTopLeftRadius) || 0
@@ -1648,16 +1667,87 @@ var DendriteView = class extends ItemView {
     };
     const heights = [...cols].map((c) => c.clientHeight);
     const targets = core.alignColumns(this.cols, node, pos, heights);
-    cols.forEach((col2, d) => {
-      if (targets[d] !== null) {
-        col2.scrollTo({ top: targets[d], behavior });
-      }
-    });
+    if (this.nativeScroll) {
+      cols.forEach((col2, d) => {
+        if (targets[d] !== null) {
+          col2.scrollTo({ top: targets[d], behavior });
+        }
+      });
+    } else {
+      this.animateOffsets(targets, smooth);
+    }
     const col = cols[node.depth];
     if (col) {
       const left = col.offsetLeft - (this.board.clientWidth - col.offsetWidth) / 2;
       this.board.scrollTo({ left, behavior });
     }
+  }
+  /** A column's scroll position, however it is scrolled. */
+  colOffset(d) {
+    const cols = this.board.querySelectorAll(".dendrite-col");
+    if (this.nativeScroll) return cols[d] ? cols[d].scrollTop : 0;
+    return this.offsets[d] || 0;
+  }
+  /** Scroll a column to `y`, clamped to its content. */
+  setColOffset(d, y) {
+    const col = this.board.querySelectorAll(".dendrite-col")[d];
+    const inner = this.colInners[d];
+    if (!col || !inner) return;
+    const max = Math.max(0, inner.scrollHeight - col.clientHeight);
+    const v = Math.max(0, Math.min(max, y));
+    if (this.nativeScroll) {
+      col.scrollTop = v;
+      return;
+    }
+    this.offsets[d] = v;
+    inner.style.transform = `translateY(${-v}px)`;
+  }
+  /**
+   * Move columns to their targets, easing over a few frames, with the
+   * flow redrawn in each frame so it never trails the cards.
+   */
+  animateOffsets(targets, smooth) {
+    if (this.anim) cancelAnimationFrame(this.anim);
+    this.anim = null;
+    const from = targets.map((_, d) => this.colOffset(d));
+    if (!smooth) {
+      targets.forEach((y, d) => {
+        if (y !== null) this.setColOffset(d, y);
+      });
+      this.drawFlow();
+      return;
+    }
+    const start = performance.now();
+    const DURATION = 220;
+    const step = (now) => {
+      const k = Math.min(1, (now - start) / DURATION);
+      const e = 1 - Math.pow(1 - k, 3);
+      targets.forEach((y, d) => {
+        if (y !== null) {
+          this.setColOffset(d, from[d] + (y - from[d]) * e);
+        }
+      });
+      this.drawFlow();
+      this.anim = k < 1 ? requestAnimationFrame(step) : null;
+    };
+    this.anim = requestAnimationFrame(step);
+  }
+  /** The wheel scrolls the column under it, flow redrawn the same frame. */
+  onWheel(e) {
+    if (e.ctrlKey) return;
+    const horizontal = e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY);
+    if (horizontal) return;
+    const col = e.target.closest && e.target.closest(".dendrite-col");
+    if (!col) return;
+    e.preventDefault();
+    if (this.anim) {
+      cancelAnimationFrame(this.anim);
+      this.anim = null;
+    }
+    const d = Number(col.dataset.depth);
+    const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? col.clientHeight : 1;
+    this.setColOffset(d, this.colOffset(d) + e.deltaY * unit);
+    this.drawFlow();
   }
   renderToolbar() {
     if (this.toolbar) this.toolbar.remove();
@@ -2026,12 +2116,16 @@ var DendriteView = class extends ItemView {
   autoScroll(x, y) {
     const EDGE = 48;
     const STEP = 14;
-    for (const col of this.board.querySelectorAll(".dendrite-col")) {
+    this.board.querySelectorAll(".dendrite-col").forEach((col, d) => {
       const r = col.getBoundingClientRect();
-      if (x < r.left || x > r.right) continue;
-      if (y < r.top + EDGE) col.scrollTop -= STEP;
-      else if (y > r.bottom - EDGE) col.scrollTop += STEP;
-    }
+      if (x < r.left || x > r.right) return;
+      if (y < r.top + EDGE) {
+        this.setColOffset(d, this.colOffset(d) - STEP);
+      } else if (y > r.bottom - EDGE) {
+        this.setColOffset(d, this.colOffset(d) + STEP);
+      }
+    });
+    this.drawFlow();
     const b = this.board.getBoundingClientRect();
     if (x < b.left + EDGE) this.board.scrollLeft -= STEP;
     else if (x > b.right - EDGE) this.board.scrollLeft += STEP;
