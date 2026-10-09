@@ -1105,6 +1105,13 @@ var DEFAULTS = {
   pdfEngine: "xelatex",
   zoteroPort: 23119,
   fallbackBib: "",
+  // Values added to the type property of index notes and cards, so file
+  // lists and colour rules can tell a manuscript from its cards. The
+  // index's is a link, giving manuscripts a type page; a card's is plain
+  // text, keeping hundreds of cards out of the vault's links. Empty
+  // writes none.
+  indexType: "[[dendrite index]]",
+  cardType: "dendrite card",
   // The Linter ignore entry Dendrite added itself, if any, so that only
   // that entry is ever removed again.
   linterAdded: null
@@ -1259,6 +1266,19 @@ var DendriteView = class extends ItemView {
     this.loadText(text);
     this.render();
     await this.sweepStatuses();
+    await this.sweepTypes();
+  }
+  /** Add the index's and every card's type value, where missing. */
+  async sweepTypes() {
+    const s = this.plugin.settings;
+    if (s.indexType && this.file) {
+      await addType(this.app, this.file, s.indexType);
+    }
+    if (!s.cardType) return;
+    for (const n of core.allNodes(this.root)) {
+      const f = this.cardFile(n.id);
+      if (f) await addType(this.app, f, s.cardType);
+    }
   }
   loadText(text) {
     const { body } = core.splitFrontmatter(text);
@@ -2291,10 +2311,14 @@ var DendriteView = class extends ItemView {
     if (!this.app.vault.getAbstractFileByPath(folder)) {
       await this.app.vault.createFolder(folder);
     }
-    return this.app.vault.create(
+    const f = await this.app.vault.create(
       normalizePath(`${folder}/${id}.md`),
       text
     );
+    if (this.plugin.settings.cardType) {
+      await addType(this.app, f, this.plugin.settings.cardType);
+    }
+    return f;
   }
   /**
    * Move the selection, or everything after the cursor, out of the card
@@ -3512,6 +3536,16 @@ var CardModal = class extends Modal {
     this.contentEl.empty();
   }
 };
+async function addType(app, file, value) {
+  const fm = app.metadataCache.getFileCache(file)?.frontmatter;
+  const has = (v) => (Array.isArray(v) ? v : v ? [v] : []).some((x) => String(x).trim() === value);
+  if (fm && has(fm.type)) return;
+  await app.fileManager.processFrontMatter(file, (front) => {
+    const list = Array.isArray(front.type) ? front.type : front.type ? [front.type] : [];
+    if (!list.some((x) => String(x).trim() === value)) list.push(value);
+    front.type = list;
+  });
+}
 async function writeProps(app, file, draft) {
   if (!Object.keys(draft).length) return;
   await app.fileManager.processFrontMatter(file, (fm) => {
@@ -3574,6 +3608,14 @@ var DendriteSettings = class extends PluginSettingTab {
     }));
     new Setting(containerEl).setName("Open index notes in Dendrite").setDesc("Opening an index note shows it in Dendrite. Its markdown stays one button away in the view.").addToggle((tg) => tg.setValue(s.openInDendrite).onChange((v) => {
       s.openInDendrite = v;
+      save();
+    }));
+    new Setting(containerEl).setName("Index note type").setDesc("Added to each index note's type property, so file lists and colour rules can mark manuscripts. Empty adds none.").addText((t) => t.setValue(s.indexType).onChange((v) => {
+      s.indexType = v.trim();
+      save();
+    }));
+    new Setting(containerEl).setName("Card type").setDesc("Added to each card's type property. Plain text rather than a link keeps cards out of the vault's links. Empty adds none.").addText((t) => t.setValue(s.cardType).onChange((v) => {
+      s.cardType = v.trim();
       save();
     }));
     new Setting(containerEl).setName("Top section heading level").setDesc("Export writes a top-level section card as this heading level, deeper sections one level down each. A manuscript can set its own in its Settings.").addDropdown((d) => {
@@ -4066,6 +4108,9 @@ dendrite_prefix: ${prefix}
 ---
 `
     );
+    if (this.settings.indexType) {
+      await addType(this.app, index, this.settings.indexType);
+    }
     await new Promise((r) => {
       const ref = this.app.metadataCache.on("changed", (f) => {
         if (f === index) {

@@ -861,7 +861,7 @@ test('settings are grouped under headings by what they affect', () => {
         (s.heading ? '## ' : '') + s.name);
     assert.deepEqual(out, [
         '## Manuscripts', 'Writing folder', 'Open index notes in Dendrite',
-        'Top section heading level',
+        'Index note type', 'Card type', 'Top section heading level',
         '## Board', 'Card width', 'Vim-style keys',
         '## Writing in cards', 'Use Obsidian\'s editor in cards',
         'Autosave delay',
@@ -962,4 +962,26 @@ test('PDF export from the board uses the manuscript\'s citation style',
               'written beside the index, in the vault');
     assert.equal(args[args.indexOf('--csl') + 1], '/vault/styles/apa.csl');
     assert.deepEqual(shown, [['W/Grant/exports/Grant.pdf', 'pdf']]);
+});
+
+test('the index and every card get their type, kept beside existing ones',
+     async () => {
+    const { view, read } = await open(
+        '---\ndendrite_prefix: G\n---\n- [[G-aaaaa|A]]\n',
+        { 'G-aaaaa': '---\ntype:\n  - "[[journal article]]"\n---\nA' });
+    view.plugin.settings.indexType = '[[dendrite index]]';
+    view.plugin.settings.cardType = 'dendrite card';
+    await view.reload();
+    assert.match(read(INDEX), /type:\n  - \[\[dendrite index\]\]/);
+    assert.match(read(cardPath('G-aaaaa')),
+                 /type:\n  - "\[\[journal article\]\]"\n  - dendrite card/,
+                 'an existing type is kept');
+    view.active = 'G-aaaaa';
+    await view.insert('below');
+    const fresh = view.active;
+    await view.endEdit();
+    assert.match(read(cardPath(fresh)), /type:\n  - dendrite card/);
+    await view.reload();
+    assert.equal((read(INDEX).match(/dendrite index/g) || []).length, 1,
+                 'added once, never twice');
 });

@@ -118,6 +118,10 @@ Cards are ordinary notes, so any plugin that rewrites notes acts on them too. Th
 
 Linter's clean-up still reaches cards, through Dendrite: when you leave a card you changed, Dendrite runs Linter on it with "File name heading" and "Capitalize headings" switched off for that run, so blank lines, emphasis markers and list markers are tidied as on save. **Clean up cards with Linter** turns this off. It uses Linter's internal `runLinterFile`; if a Linter update removes it, cards are simply left unlinted.
 
+## Note types
+
+Dendrite adds a value to each note's `type` property, keeping any values already there, so file lists and colour rules can tell a manuscript from its cards: `"[[dendrite index]]"` on index notes, a link so manuscripts gather on a type page, and `dendrite card` on cards, plain text so hundreds of cards stay out of the vault's links. Both are settings; empty adds none. Opening a manuscript adds them where missing.
+
 ## Labels
 
 The index shows each card by a label: the card's heading line if it starts with one, else the first of its `aliases`, else its first words. Dendrite keeps the index's labels in step with the cards, so edit a label in the card, not in the index.
