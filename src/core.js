@@ -376,6 +376,45 @@ function exportSegments(nodes, bodyOf, headingTop, numbers, roleOf) {
 }
 
 /**
+ * Tidy printed markdown the way the Linter plugin's blank-line rules do,
+ * so exported text is clean whatever is inside the cards: a blank line
+ * before and after every heading, runs of blank lines collapsed to one,
+ * no trailing spaces, and one newline at the end. Fenced code is left
+ * exactly as written. Only output is tidied; cards are never changed.
+ */
+function normaliseMarkdown(text) {
+    const out = [];
+    let fence = null;
+    for (const raw of String(text).split('\n')) {
+        const m = /^\s*(`{3,}|~{3,})/.exec(raw);
+        if (fence) {
+            out.push(raw);
+            if (m && m[1][0] === fence[0] && m[1].length >= fence.length) {
+                fence = null;
+            }
+            continue;
+        }
+        if (m) fence = m[1];
+        const line = fence ? raw : raw.replace(/[ \t]+$/, '');
+        const heading = !fence && HEADING.test(line);
+        if (heading && out.length && out[out.length - 1] !== '') {
+            out.push('');
+        }
+        if (line === '' && out.length && out[out.length - 1] === '') {
+            continue;
+        }
+        if (out.length && out[out.length - 1] !== '' &&
+            HEADING.test(out[out.length - 1]) && line !== '') {
+            out.push('');
+        }
+        out.push(line);
+    }
+    while (out.length && out[0] === '') out.shift();
+    while (out.length && out[out.length - 1] === '') out.pop();
+    return out.length ? out.join('\n') + '\n' : '';
+}
+
+/**
  * Assemble a manuscript: every card's printed text, in reading order, by
  * the roles above. Comments are dropped everywhere. `bodyOf(id)` returns a
  * card's body.
@@ -383,7 +422,7 @@ function exportSegments(nodes, bodyOf, headingTop, numbers, roleOf) {
 function exportMarkdown(nodes, bodyOf, headingTop, numbers, roleOf) {
     const blocks = exportSegments(nodes, bodyOf, headingTop, numbers,
                                   roleOf).map((s) => s.text).filter(Boolean);
-    return blocks.join('\n\n') + (blocks.length ? '\n' : '');
+    return normaliseMarkdown(blocks.join('\n\n'));
 }
 
 /**
@@ -812,6 +851,7 @@ module.exports = {
     mergeIntoAbove, mergeIntoParent, moveNode,
     flowPath, threadPath, exportSegments, roleFor, ROLES,
     STATUSES, isFlag, leftover, lowerStatus, statusReport,
+    normaliseMarkdown,
     INDENT, splitFrontmatter, parseIndex, serialiseTree, writeIndexText,
     deriveLabel, stripComments, validPrefix, newId, makeNode, makeRoot,
     insertSibling, appendChild, moveWithin, indent, outdent, remove,

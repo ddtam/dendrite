@@ -736,7 +736,7 @@ test('the preview prints by role, follows edits, and links to the board',
     await tick(20);
     const blocks = () => [...view.contentEl.querySelectorAll(
         '.dendrite-pblock')].filter((b) => !b.hasClass('is-empty'));
-    const texts = () => blocks().map((b) => b.textContent);
+    const texts = () => blocks().map((b) => b.textContent.trim());
     assert.deepEqual(texts(), ['# 1. Research outline', '# 2. Aims',
                                'The aims prose.'],
                      'headings numbered, notes and comments left out');

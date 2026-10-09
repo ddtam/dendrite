@@ -275,6 +275,36 @@ var require_core = __commonJS({
       for (const n of nodes) walk(n, 0);
       return segs;
     }
+    function normaliseMarkdown(text) {
+      const out = [];
+      let fence = null;
+      for (const raw of String(text).split("\n")) {
+        const m = /^\s*(`{3,}|~{3,})/.exec(raw);
+        if (fence) {
+          out.push(raw);
+          if (m && m[1][0] === fence[0] && m[1].length >= fence.length) {
+            fence = null;
+          }
+          continue;
+        }
+        if (m) fence = m[1];
+        const line = fence ? raw : raw.replace(/[ \t]+$/, "");
+        const heading = !fence && HEADING.test(line);
+        if (heading && out.length && out[out.length - 1] !== "") {
+          out.push("");
+        }
+        if (line === "" && out.length && out[out.length - 1] === "") {
+          continue;
+        }
+        if (out.length && out[out.length - 1] !== "" && HEADING.test(out[out.length - 1]) && line !== "") {
+          out.push("");
+        }
+        out.push(line);
+      }
+      while (out.length && out[0] === "") out.shift();
+      while (out.length && out[out.length - 1] === "") out.pop();
+      return out.length ? out.join("\n") + "\n" : "";
+    }
     function exportMarkdown(nodes, bodyOf, headingTop, numbers, roleOf) {
       const blocks = exportSegments(
         nodes,
@@ -283,7 +313,7 @@ var require_core = __commonJS({
         numbers,
         roleOf
       ).map((s) => s.text).filter(Boolean);
-      return blocks.join("\n\n") + (blocks.length ? "\n" : "");
+      return normaliseMarkdown(blocks.join("\n\n"));
     }
     function sectionNumbers(roots, hasHeading, roleOf) {
       const out = /* @__PURE__ */ new Map();
@@ -580,6 +610,7 @@ var require_core = __commonJS({
       leftover,
       lowerStatus,
       statusReport,
+      normaliseMarkdown,
       INDENT,
       splitFrontmatter,
       parseIndex,
@@ -3013,7 +3044,7 @@ var DendritePreview = class extends ItemView {
       this.app.workspace.requestSaveLayout();
       this.refresh();
     });
-    this.doc = el.createDiv({ cls: "dendrite-preview-doc markdown-rendered" });
+    this.doc = el.createDiv({ cls: "dendrite-preview-doc markdown-preview-view markdown-rendered" });
   }
   scheduleRefresh() {
     clearTimeout(this.refreshTimer);
@@ -3133,7 +3164,7 @@ var DendritePreview = class extends ItemView {
     if (s.text) {
       await MarkdownRenderer.render(
         this.app,
-        s.text,
+        core.normaliseMarkdown(s.text),
         b.el.createDiv(),
         path,
         b.comp

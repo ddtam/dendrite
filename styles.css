@@ -577,10 +577,13 @@
     width: 100%;
 }
 
+/* No vertical padding, so the margins of the paragraphs and headings
+   inside collapse across blocks as they would in one note: a block is
+   spaced like the text it holds, and a heading keeps its room above. */
 .dendrite-pblock {
     border-radius: var(--radius-s);
-    padding: 2px 6px;
-    margin: 0 -6px;
+    padding: 0 8px;
+    margin: 0 -8px;
     cursor: pointer;
     min-height: 1.4em;
 }
@@ -598,12 +601,9 @@
     display: none;
 }
 
-.dendrite-pblock > div > :first-child {
+/* The document's first heading needs no room above it. */
+.dendrite-preview-doc > .dendrite-pblock:first-child > div > :first-child {
     margin-top: 0;
-}
-
-.dendrite-pblock > div > :last-child {
-    margin-bottom: 0;
 }
 
 /* Text that does not print, shown dimmed when asked for. */

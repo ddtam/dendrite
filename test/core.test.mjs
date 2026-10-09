@@ -494,3 +494,12 @@ test('moving a card with its branch above, below or into another card',
         assert.ok(n.parent.children.includes(n), n.id);
     }
 });
+
+test('exported markdown is tidied like the Linter, code left alone', () => {
+    const md = '# Aims   \nFirst line.\n\n\n\nSecond.\n## Sub\nText.\n' +
+        '```r\nx <- 1   \n\n\n# not a heading\n```\nAfter.\n\n';
+    assert.equal(c.normaliseMarkdown(md),
+                 '# Aims\n\nFirst line.\n\nSecond.\n\n## Sub\n\nText.\n' +
+                 '```r\nx <- 1   \n\n\n# not a heading\n```\nAfter.\n');
+    assert.equal(c.normaliseMarkdown('\n\n'), '');
+});

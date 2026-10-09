@@ -2150,6 +2150,7 @@ class DendritePreview extends ItemView {
             this.refresh();
         });
         this.doc = el.createDiv({ cls: 'dendrite-preview-doc ' +
+                                       'markdown-preview-view ' +
                                        'markdown-rendered' });
     }
 
@@ -2278,9 +2279,12 @@ class DendritePreview extends ItemView {
         b.el.empty();
         const f = this.cardFile(id);
         const path = f ? f.path : this.file.path;
+        // The same tidied text export writes, so the preview shows the
+        // document's real spacing.
         if (s.text) {
-            await MarkdownRenderer.render(this.app, s.text,
-                b.el.createDiv(), path, b.comp);
+            await MarkdownRenderer.render(this.app,
+                core.normaliseMarkdown(s.text), b.el.createDiv(), path,
+                b.comp);
         }
         if (this.showLeft && s.left) {
             await MarkdownRenderer.render(this.app, s.left,
