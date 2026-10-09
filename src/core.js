@@ -252,6 +252,27 @@ function mergeIntoParent(node) {
     return parent;
 }
 
+/**
+ * Move a card, with its branch, above or below another card, or to the
+ * end of its children. Refused, returning false, onto itself or into its
+ * own branch, which would detach the branch from the tree.
+ */
+function moveNode(node, target, where) {
+    if (!node || !target || node === target) return false;
+    for (let p = target; p; p = p.parent) if (p === node) return false;
+    const sibs = node.parent.children;
+    sibs.splice(sibs.indexOf(node), 1);
+    if (where === 'child') {
+        node.parent = target;
+        target.children.push(node);
+    } else {
+        const ts = target.parent.children;
+        ts.splice(ts.indexOf(target) + (where === 'below' ? 1 : 0), 0, node);
+        node.parent = target.parent;
+    }
+    return true;
+}
+
 function remove(node) {
     node.parent.children.splice(indexOf(node), 1);
     return true;
@@ -788,7 +809,7 @@ module.exports = {
     parseLimit, formatLimit, countText, measure, sectionNumbers,
     alignColumns, parseAmount, convert, quotas, fmtNum,
     splitText, mergeText,
-    mergeIntoAbove, mergeIntoParent,
+    mergeIntoAbove, mergeIntoParent, moveNode,
     flowPath, threadPath, exportSegments, roleFor, ROLES,
     STATUSES, isFlag, leftover, lowerStatus, statusReport,
     INDENT, splitFrontmatter, parseIndex, serialiseTree, writeIndexText,

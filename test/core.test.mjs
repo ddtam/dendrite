@@ -473,3 +473,24 @@ test('status: printing cards carry their own, sections show the worst ' +
     assert.equal(c.lowerStatus('done', 'revise'), 'revise');
     assert.equal(c.lowerStatus('done', null), 'draft');
 });
+
+test('moving a card with its branch above, below or into another card',
+     () => {
+    const { root } = c.parseIndex(c.splitFrontmatter(INDEX).body);
+    const [aims, sig] = root.children;
+    const aim1 = aims.children[0];
+    assert.ok(c.moveNode(sig, aims, 'above'));
+    assert.deepEqual(root.children.map((n) => n.id),
+                     ['R01-eeeee', 'R01-aaaaa']);
+    assert.ok(c.moveNode(aims, sig, 'child'));
+    assert.equal(aims.parent, sig);
+    assert.equal(aim1.parent, aims, 'the branch moves with it');
+    assert.ok(!c.moveNode(sig, aim1, 'below'), 'not into its own branch');
+    assert.ok(!c.moveNode(sig, sig, 'child'), 'not onto itself');
+    assert.ok(c.moveNode(aim1, sig, 'below'));
+    assert.deepEqual(root.children.map((n) => n.id),
+                     ['R01-eeeee', 'R01-bbbbb']);
+    for (const n of c.allNodes(root)) {
+        assert.ok(n.parent.children.includes(n), n.id);
+    }
+});

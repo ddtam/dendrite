@@ -185,6 +185,21 @@ var require_core = __commonJS({
       node.children = [];
       return parent;
     }
+    function moveNode(node, target, where) {
+      if (!node || !target || node === target) return false;
+      for (let p = target; p; p = p.parent) if (p === node) return false;
+      const sibs = node.parent.children;
+      sibs.splice(sibs.indexOf(node), 1);
+      if (where === "child") {
+        node.parent = target;
+        target.children.push(node);
+      } else {
+        const ts = target.parent.children;
+        ts.splice(ts.indexOf(target) + (where === "below" ? 1 : 0), 0, node);
+        node.parent = target.parent;
+      }
+      return true;
+    }
     function remove(node) {
       node.parent.children.splice(indexOf(node), 1);
       return true;
@@ -554,6 +569,7 @@ var require_core = __commonJS({
       mergeText,
       mergeIntoAbove,
       mergeIntoParent,
+      moveNode,
       flowPath,
       threadPath,
       exportSegments,
@@ -1012,6 +1028,22 @@ var DendriteView = class extends ItemView {
       "keydown",
       (e) => this.onNavKey(e)
     );
+    this.registerDomEvent(
+      this.contentEl,
+      "pointerdown",
+      (e) => this.onDragDown(e)
+    );
+    this.registerDomEvent(
+      window,
+      "pointermove",
+      (e) => this.onDragMove(e)
+    );
+    this.registerDomEvent(window, "pointerup", (e) => this.onDragUp(e));
+    this.registerDomEvent(
+      window,
+      "pointercancel",
+      () => this.cancelDrag()
+    );
     this.registerDomEvent(this.contentEl, "contextmenu", async (e) => {
       const card = e.target.closest(".dendrite-card");
       if (!card || e.target.closest("textarea, .dendrite-cm")) return;
@@ -1032,6 +1064,7 @@ var DendriteView = class extends ItemView {
     );
   }
   async onClose() {
+    this.cancelDrag();
     this.hideQuotaTip();
     this.closeQuotaEditor();
     await this.flush();
@@ -1567,6 +1600,10 @@ var DendriteView = class extends ItemView {
   }
   // ---- interaction -----------------------------------------------------
   onClick(e) {
+    if (this.justDragged) {
+      this.justDragged = false;
+      return;
+    }
     const link = e.target.closest("a.internal-link");
     if (link) {
       e.preventDefault();
@@ -1639,6 +1676,10 @@ var DendriteView = class extends ItemView {
     s.register([], "Tab", () => this.editKey("indent"));
     s.register(["Shift"], "Tab", () => this.editKey("outdent"));
     s.register([], "Escape", () => {
+      if (this.drag && this.drag.started) {
+        this.cancelDrag();
+        return false;
+      }
       if (!this.editing) return true;
       this.endEdit();
       return false;
@@ -1684,6 +1725,123 @@ var DendriteView = class extends ItemView {
       this.doUndo();
       return false;
     });
+  }
+  // ---- dragging cards -------------------------------------------------
+  onDragDown(e) {
+    if (e.button !== 0 || e.pointerType === "touch") return;
+    if (e.target.closest("textarea, .dendrite-cm, button, a, input, .dendrite-quota, .dendrite-toolbar")) return;
+    const card = e.target.closest(".dendrite-card");
+    if (!card) return;
+    this.drag = {
+      id: card.dataset.id,
+      x: e.clientX,
+      y: e.clientY,
+      started: false,
+      target: null
+    };
+  }
+  onDragMove(e) {
+    const d = this.drag;
+    if (!d) return;
+    if (!d.started) {
+      if (Math.hypot(e.clientX - d.x, e.clientY - d.y) < 6) return;
+      d.started = true;
+      const node = this.byId.get(d.id);
+      d.ghost = document.body.createDiv({
+        cls: "dendrite-ghost",
+        text: node ? node.label || node.id : d.id
+      });
+      const src = this.cardEls.get(d.id);
+      if (src) src.addClass("is-dragging");
+      this.board.addClass("is-dragging-card");
+      const sel = window.getSelection && window.getSelection();
+      if (sel) sel.removeAllRanges();
+    }
+    e.preventDefault();
+    d.ghost.style.left = e.clientX + 12 + "px";
+    d.ghost.style.top = e.clientY + 12 + "px";
+    this.showDropTarget(this.dropTargetAt(e.clientX, e.clientY));
+    this.autoScroll(e.clientX, e.clientY);
+  }
+  async onDragUp(e) {
+    const d = this.drag;
+    if (!d) return;
+    const target = d.started ? d.target : null;
+    if (d.started) {
+      e.preventDefault();
+      this.justDragged = true;
+      setTimeout(() => {
+        this.justDragged = false;
+      }, 0);
+    }
+    this.cancelDrag();
+    if (target) await this.dropCard(d.id, target.id, target.where);
+  }
+  cancelDrag() {
+    const d = this.drag;
+    this.drag = null;
+    if (!d) return;
+    if (d.ghost) d.ghost.remove();
+    if (this.board) this.board.removeClass("is-dragging-card");
+    this.showDropTarget(null);
+    const src = this.cardEls.get(d.id);
+    if (src) src.removeClass("is-dragging");
+  }
+  /**
+   * Where a card dropped at a point would go: over a card's right edge,
+   * its last child; over its top half, above it; else below it. Null
+   * over nothing, or over the dragged card's own branch.
+   */
+  dropTargetAt(x, y) {
+    const d = this.drag;
+    const el = document.elementFromPoint ? document.elementFromPoint(x, y) : null;
+    const card = el && el.closest && el.closest(".dendrite-card");
+    if (!d || !card) return null;
+    const node = this.byId.get(d.id);
+    const target = this.byId.get(card.dataset.id);
+    if (!node || !target) return null;
+    for (let p = target; p; p = p.parent) if (p === node) return null;
+    const r = card.getBoundingClientRect();
+    const where = x > r.right - r.width * 0.25 ? "child" : y < r.top + r.height / 2 ? "above" : "below";
+    return { id: target.id, where };
+  }
+  showDropTarget(t) {
+    if (this.drag) this.drag.target = t;
+    for (const el2 of this.cardEls.values()) {
+      el2.removeClass("drop-above");
+      el2.removeClass("drop-below");
+      el2.removeClass("drop-child");
+    }
+    const el = t && this.cardEls.get(t.id);
+    if (el) el.addClass(`drop-${t.where}`);
+  }
+  /** Near a column's top or bottom, or the board's sides, scroll. */
+  autoScroll(x, y) {
+    const EDGE = 48;
+    const STEP = 14;
+    for (const col of this.board.querySelectorAll(".dendrite-col")) {
+      const r = col.getBoundingClientRect();
+      if (x < r.left || x > r.right) continue;
+      if (y < r.top + EDGE) col.scrollTop -= STEP;
+      else if (y > r.bottom - EDGE) col.scrollTop += STEP;
+    }
+    const b = this.board.getBoundingClientRect();
+    if (x < b.left + EDGE) this.board.scrollLeft -= STEP;
+    else if (x > b.right - EDGE) this.board.scrollLeft += STEP;
+  }
+  /** Drop a card, with its branch, above, below or into another. */
+  async dropCard(id, targetId, where) {
+    if (this.editing) await this.endEdit();
+    const node = this.byId.get(id);
+    const target = this.byId.get(targetId);
+    const before = core.serialiseTree(this.root);
+    if (!core.moveNode(node, target, where)) return;
+    this.undo.push({ tree: before, active: id, files: [] });
+    if (this.undo.length > UNDO_DEPTH) this.undo.shift();
+    this.active = id;
+    await this.writeIndex();
+    await this.sweepStatuses();
+    this.render();
   }
   // ---- editing ---------------------------------------------------------
   /** Run a text command in the editor; true lets the key through. */

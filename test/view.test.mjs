@@ -892,3 +892,45 @@ test('every printing card holds its status; structural cards hold none',
     await view.endEdit();
     assert.match(read(cardPath(fresh)), /dendrite_status: draft/);
 });
+
+test('dragging a card drops it above, below or into another, with undo',
+     async () => {
+    const index = '---\ndendrite_prefix: G\n---\n' +
+        '- [[G-aaaaa|A]]\n    - [[G-bbbbb|B]]\n- [[G-ccccc|C]]\n';
+    const { view, read } = await open(index,
+        { 'G-aaaaa': 'A', 'G-bbbbb': 'B', 'G-ccccc': 'C' });
+    const ids = () => read(INDEX).replace(/^---[\s\S]*?---\n/, '');
+    // Where the pointer is over is decided by dropTargetAt; the browser's
+    // hit-testing is not available here, so it is fixed per step.
+    let over = null;
+    view.dropTargetAt = () => over;
+    const ev = (type, x, y, extra = {}) => new h.window.MouseEvent(type,
+        Object.assign({ bubbles: true, cancelable: true, button: 0,
+                        clientX: x, clientY: y }, extra));
+    const drag = async (id, target) => {
+        view.cardEls.get(id).dispatchEvent(ev('pointerdown', 0, 0));
+        over = target;
+        h.window.dispatchEvent(ev('pointermove', 30, 30));
+        h.window.dispatchEvent(ev('pointerup', 30, 30));
+        await tick(10);
+    };
+    // A press that does not move is a click, not a drag.
+    view.cardEls.get('G-ccccc').dispatchEvent(ev('pointerdown', 0, 0));
+    h.window.dispatchEvent(ev('pointerup', 2, 2));
+    await tick(5);
+    assert.equal(ids(), index.replace(/^---[\s\S]*?---\n/, ''));
+
+    await drag('G-ccccc', { id: 'G-aaaaa', where: 'above' });
+    assert.equal(ids(), '- [[G-ccccc|C]]\n- [[G-aaaaa|A]]\n' +
+                 '    - [[G-bbbbb|B]]\n');
+    await drag('G-ccccc', { id: 'G-bbbbb', where: 'child' });
+    assert.equal(ids(), '- [[G-aaaaa|A]]\n    - [[G-bbbbb|B]]\n' +
+                 '        - [[G-ccccc|C]]\n', 'dropped into B');
+    await drag('G-aaaaa', { id: 'G-ccccc', where: 'below' });
+    assert.match(ids(), /^- \[\[G-aaaaa/, 'not into its own branch');
+    await view.doUndo();
+    assert.equal(ids(), '- [[G-ccccc|C]]\n- [[G-aaaaa|A]]\n' +
+                 '    - [[G-bbbbb|B]]\n', 'undo reverses one drop');
+    assert.equal(document.querySelector('.dendrite-ghost'), null,
+                 'no label left behind');
+});

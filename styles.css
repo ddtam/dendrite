@@ -657,3 +657,42 @@
     box-shadow: inset 3px 0 0 color-mix(in srgb,
         var(--dendrite-chip, var(--color-orange)) 55%, transparent);
 }
+
+/* Dragging a card: a small label follows the pointer, the card being
+   moved fades, and an accent line or edge shows where it will land. */
+.dendrite-ghost {
+    position: fixed;
+    z-index: var(--layer-dragged-item, 80);
+    pointer-events: none;
+    max-width: 240px;
+    padding: 4px 10px;
+    border-radius: var(--radius-s);
+    background: var(--background-primary);
+    border: 1px solid var(--interactive-accent);
+    box-shadow: var(--shadow-l);
+    font-size: var(--font-ui-small);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.dendrite-card.is-dragging {
+    opacity: 0.35;
+}
+
+.dendrite-card.drop-above {
+    box-shadow: 0 -3px 0 0 var(--interactive-accent);
+}
+
+.dendrite-card.drop-below {
+    box-shadow: 0 3px 0 0 var(--interactive-accent);
+}
+
+.dendrite-card.drop-child {
+    box-shadow: inset -5px 0 0 0 var(--interactive-accent);
+}
+
+/* No text selection while a card is being dragged. */
+.dendrite-board.is-dragging-card {
+    user-select: none;
+}
