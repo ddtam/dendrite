@@ -275,6 +275,69 @@ var require_core = __commonJS({
       for (const n of nodes) walk(n, 0);
       return segs;
     }
+    function renumberFootnotes(segments) {
+      let next = 0;
+      const all = [];
+      const out = segments.map((seg) => {
+        const local = /* @__PURE__ */ new Map();
+        const defs = /* @__PURE__ */ new Map();
+        const kept = [];
+        const lines = (seg.text || "").split("\n");
+        let fence = null;
+        let inDef = null;
+        for (const line of lines) {
+          const f = /^\s*(`{3,}|~{3,})/.exec(line);
+          if (fence) {
+            kept.push(line);
+            if (f && f[1][0] === fence[0] && f[1].length >= fence.length) fence = null;
+            continue;
+          }
+          if (f) {
+            fence = f[1];
+            inDef = null;
+            kept.push(line);
+            continue;
+          }
+          const d = /^\[\^([^\]\s]+)\]:\s?(.*)$/.exec(line);
+          if (d) {
+            inDef = d[1];
+            defs.set(inDef, [d[2]]);
+            continue;
+          }
+          if (inDef && (/^(\t| {2,})\S/.test(line) || line === "")) {
+            defs.get(inDef).push(line);
+            continue;
+          }
+          inDef = null;
+          kept.push(line);
+        }
+        const renum = (label) => {
+          if (!local.has(label)) local.set(label, ++next);
+          return local.get(label);
+        };
+        const body = kept.join("\n").split(/(`[^`\n]*`)/).map((part) => part.startsWith("`") ? part : part.replace(
+          /\[\^([^\]\s]+)\](?!:)/g,
+          (m, label) => `[^${renum(label)}]`
+        )).join("");
+        const notes = [];
+        for (const [label, text] of defs) {
+          const n = renum(label);
+          const def = text.join("\n").replace(/\s+$/, "");
+          notes.push({ n, text: def });
+        }
+        notes.sort((a, b) => a.n - b.n);
+        all.push(...notes);
+        return Object.assign({}, seg, {
+          text: body.replace(/\n+$/, ""),
+          notes
+        });
+      });
+      all.sort((a, b) => a.n - b.n);
+      return { segments: out, notes: all };
+    }
+    function footnoteBlock(notes) {
+      return notes.map((x) => `[^${x.n}]: ${x.text}`).join("\n");
+    }
     function normaliseMarkdown(text) {
       const out = [];
       let fence = null;
@@ -306,13 +369,11 @@ var require_core = __commonJS({
       return out.length ? out.join("\n") + "\n" : "";
     }
     function exportMarkdown(nodes, bodyOf, headingTop, numbers, roleOf) {
-      const blocks = exportSegments(
-        nodes,
-        bodyOf,
-        headingTop,
-        numbers,
-        roleOf
-      ).map((s) => s.text).filter(Boolean);
+      const { segments, notes } = renumberFootnotes(
+        exportSegments(nodes, bodyOf, headingTop, numbers, roleOf)
+      );
+      const blocks = segments.map((s) => s.text).filter(Boolean);
+      if (notes.length) blocks.push(footnoteBlock(notes));
       return normaliseMarkdown(blocks.join("\n\n"));
     }
     function sectionNumbers(roots, hasHeading, roleOf) {
@@ -611,6 +672,8 @@ var require_core = __commonJS({
       lowerStatus,
       statusReport,
       normaliseMarkdown,
+      renumberFootnotes,
+      footnoteBlock,
       INDENT,
       splitFrontmatter,
       parseIndex,
@@ -3417,10 +3480,16 @@ var DendritePreview = class extends ItemView {
       return !!first && first.type === "heading";
     };
     const numbers = fm.dendrite_number_sections === true ? core.sectionNumbers(root.children, hasHeading, roleOf) : null;
-    const segs = core.exportSegments(root.children, (id) => {
-      const b = this.bodies.get(id);
-      return b ? b.body : "";
-    }, headingTop, numbers, roleOf);
+    const segs = core.renumberFootnotes(core.exportSegments(
+      root.children,
+      (id) => {
+        const b = this.bodies.get(id);
+        return b ? b.body : "";
+      },
+      headingTop,
+      numbers,
+      roleOf
+    )).segments;
     const statusOf = (id) => {
       const s = props(id).dendrite_status;
       return core.STATUSES.includes(s) ? s : null;
@@ -3444,7 +3513,7 @@ var DendritePreview = class extends ItemView {
       }
     }
     for (const s of segs) {
-      const key = s.text + "\0" + (this.showLeft ? s.left : "");
+      const key = s.text + "\0" + core.footnoteBlock(s.notes || []) + "\0" + (this.showLeft ? s.left : "");
       let b = this.blocks.get(s.id);
       if (!b) {
         const el = createDiv({ cls: "dendrite-pblock" });
@@ -3493,9 +3562,10 @@ var DendritePreview = class extends ItemView {
     const f = this.cardFile(id);
     const path = f ? f.path : this.file.path;
     if (s.text) {
+      const notes = s.notes && s.notes.length ? "\n\n" + core.footnoteBlock(s.notes) : "";
       await MarkdownRenderer.render(
         this.app,
-        core.normaliseMarkdown(s.text),
+        core.normaliseMarkdown(s.text + notes),
         b.el.createDiv(),
         path,
         b.comp

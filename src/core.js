@@ -376,6 +376,83 @@ function exportSegments(nodes, bodyOf, headingTop, numbers, roleOf) {
 }
 
 /**
+ * Footnotes across cards. Each card numbers its own, so two cards' [^1]
+ * would collide once joined. Every reference is given a new number in
+ * reading order across all the segments, and each segment's definitions,
+ * with their indented continuation lines, are taken out of its text and
+ * returned under their new numbers. Inline footnotes, ^[text], need no
+ * number; code is left alone. Returns { segments, notes }: the segments
+ * with references renumbered and definitions removed, each also holding
+ * `notes`, its own definitions; and every definition, in order, for the
+ * end of the document.
+ */
+function renumberFootnotes(segments) {
+    let next = 0;
+    const all = [];
+    const out = segments.map((seg) => {
+        const local = new Map();
+        const defs = new Map();
+        const kept = [];
+        const lines = (seg.text || '').split('\n');
+        let fence = null;
+        let inDef = null;
+        for (const line of lines) {
+            const f = /^\s*(`{3,}|~{3,})/.exec(line);
+            if (fence) {
+                kept.push(line);
+                if (f && f[1][0] === fence[0] &&
+                    f[1].length >= fence.length) fence = null;
+                continue;
+            }
+            if (f) {
+                fence = f[1];
+                inDef = null;
+                kept.push(line);
+                continue;
+            }
+            const d = /^\[\^([^\]\s]+)\]:\s?(.*)$/.exec(line);
+            if (d) {
+                inDef = d[1];
+                defs.set(inDef, [d[2]]);
+                continue;
+            }
+            if (inDef && (/^(\t| {2,})\S/.test(line) || line === '')) {
+                defs.get(inDef).push(line);
+                continue;
+            }
+            inDef = null;
+            kept.push(line);
+        }
+        const renum = (label) => {
+            if (!local.has(label)) local.set(label, ++next);
+            return local.get(label);
+        };
+        // References outside inline code, in reading order.
+        const body = kept.join('\n').split(/(`[^`\n]*`)/).map((part) =>
+            (part.startsWith('`') ? part : part.replace(
+                /\[\^([^\]\s]+)\](?!:)/g,
+                (m, label) => `[^${renum(label)}]`))).join('');
+        const notes = [];
+        for (const [label, text] of defs) {
+            // A definition nothing refers to still keeps its text.
+            const n = renum(label);
+            const def = text.join('\n').replace(/\s+$/, '');
+            notes.push({ n, text: def });
+        }
+        notes.sort((a, b) => a.n - b.n);
+        all.push(...notes);
+        return Object.assign({}, seg, {
+            text: body.replace(/\n+$/, ''), notes });
+    });
+    all.sort((a, b) => a.n - b.n);
+    return { segments: out, notes: all };
+}
+
+function footnoteBlock(notes) {
+    return notes.map((x) => `[^${x.n}]: ${x.text}`).join('\n');
+}
+
+/**
  * Tidy printed markdown the way the Linter plugin's blank-line rules do,
  * so exported text is clean whatever is inside the cards: a blank line
  * before and after every heading, runs of blank lines collapsed to one,
@@ -420,8 +497,10 @@ function normaliseMarkdown(text) {
  * card's body.
  */
 function exportMarkdown(nodes, bodyOf, headingTop, numbers, roleOf) {
-    const blocks = exportSegments(nodes, bodyOf, headingTop, numbers,
-                                  roleOf).map((s) => s.text).filter(Boolean);
+    const { segments, notes } = renumberFootnotes(
+        exportSegments(nodes, bodyOf, headingTop, numbers, roleOf));
+    const blocks = segments.map((s) => s.text).filter(Boolean);
+    if (notes.length) blocks.push(footnoteBlock(notes));
     return normaliseMarkdown(blocks.join('\n\n'));
 }
 
@@ -851,7 +930,7 @@ module.exports = {
     mergeIntoAbove, mergeIntoParent, moveNode,
     flowPath, threadPath, exportSegments, roleFor, ROLES,
     STATUSES, isFlag, leftover, lowerStatus, statusReport,
-    normaliseMarkdown,
+    normaliseMarkdown, renumberFootnotes, footnoteBlock,
     INDENT, splitFrontmatter, parseIndex, serialiseTree, writeIndexText,
     deriveLabel, stripComments, validPrefix, newId, makeNode, makeRoot,
     insertSibling, appendChild, moveWithin, indent, outdent, remove,

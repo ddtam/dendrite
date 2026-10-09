@@ -2403,10 +2403,13 @@ class DendritePreview extends ItemView {
         };
         const numbers = fm.dendrite_number_sections === true ?
             core.sectionNumbers(root.children, hasHeading, roleOf) : null;
-        const segs = core.exportSegments(root.children, (id) => {
-            const b = this.bodies.get(id);
-            return b ? b.body : '';
-        }, headingTop, numbers, roleOf);
+        // Footnotes numbered across the whole document, as export does;
+        // each block shows its own beneath it.
+        const segs = core.renumberFootnotes(core.exportSegments(
+            root.children, (id) => {
+                const b = this.bodies.get(id);
+                return b ? b.body : '';
+            }, headingTop, numbers, roleOf)).segments;
         // Only flagged cards are marked here, with a faint bar, so the
         // preview stays a page to read.
         const statusOf = (id) => {
@@ -2434,7 +2437,8 @@ class DendritePreview extends ItemView {
             }
         }
         for (const s of segs) {
-            const key = s.text + '\u0000' + (this.showLeft ? s.left : '');
+            const key = s.text + '\u0000' + core.footnoteBlock(s.notes || []) +
+                '\u0000' + (this.showLeft ? s.left : '');
             let b = this.blocks.get(s.id);
             if (!b) {
                 const el = createDiv({ cls: 'dendrite-pblock' });
@@ -2485,9 +2489,11 @@ class DendritePreview extends ItemView {
         // The same tidied text export writes, so the preview shows the
         // document's real spacing.
         if (s.text) {
+            const notes = s.notes && s.notes.length ?
+                '\n\n' + core.footnoteBlock(s.notes) : '';
             await MarkdownRenderer.render(this.app,
-                core.normaliseMarkdown(s.text), b.el.createDiv(), path,
-                b.comp);
+                core.normaliseMarkdown(s.text + notes), b.el.createDiv(),
+                path, b.comp);
         }
         if (this.showLeft && s.left) {
             await MarkdownRenderer.render(this.app, s.left,

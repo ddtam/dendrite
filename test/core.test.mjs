@@ -503,3 +503,28 @@ test('exported markdown is tidied like the Linter, code left alone', () => {
                  '```r\nx <- 1   \n\n\n# not a heading\n```\nAfter.\n');
     assert.equal(c.normaliseMarkdown('\n\n'), '');
 });
+
+test('footnotes are renumbered across cards and gathered at the end', () => {
+    const root = c.makeRoot();
+    for (const id of ['A', 'B', 'C']) {
+        c.appendChild(root, c.makeNode(id, id, null));
+    }
+    const bodies = {
+        A: 'First claim[^1] and second[^2].\n\n[^1]: Note A1.\n' +
+           '[^2]: Note A2,\n    continued.',
+        B: 'Another claim[^1], an inline one^[inline], and `[^1]` in ' +
+           'code.\n\n[^1]: Note B1.',
+        C: 'Named[^smith].\n\n```\n[^1]: not a footnote\n```\n\n' +
+           '[^smith]: Smith, named.',
+    };
+    const out = c.exportMarkdown(root.children, (id) => bodies[id], 1);
+    assert.equal(out,
+        'First claim[^1] and second[^2].\n\n' +
+        'Another claim[^3], an inline one^[inline], and `[^1]` in code.\n\n' +
+        'Named[^4].\n\n```\n[^1]: not a footnote\n```\n\n' +
+        '[^1]: Note A1.\n[^2]: Note A2,\n    continued.\n' +
+        '[^3]: Note B1.\n[^4]: Smith, named.\n');
+    const r = c.renumberFootnotes([{ id: 'B', text: bodies.B }]);
+    assert.deepEqual(r.segments[0].notes, [{ n: 1, text: 'Note B1.' }],
+                     'each segment keeps its own notes for the preview');
+});
